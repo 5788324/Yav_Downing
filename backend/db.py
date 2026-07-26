@@ -21,6 +21,13 @@ def normalize_title(value: str) -> str:
     return re.sub(r"\s*(?:\||[-–—])\s*(?:javdb|jphoo)\s*$", "", text).strip()
 
 
+def is_invalid_metadata(value: str) -> bool:
+    clean = re.sub(r"\s+", " ", value or "").strip()
+    if not clean:
+        return True
+    invalid = {"首页", "上一页", "下一页", "登录", "注册", "查看更多", "影片信息", "演员列表", "磁力下载", "返回顶部"}
+    return clean in invalid or clean.startswith("查看") and clean.endswith("全部作品")
+
 def extract_btih(magnet: str) -> str:
     for value in parse_qs(urlparse(magnet).query).get("xt", []):
         found = re.fullmatch(r"urn:btih:([A-Za-z0-9]+)", value, re.I)
@@ -122,7 +129,16 @@ class LibraryDatabase:
                 CREATE INDEX IF NOT EXISTS idx_movie_actresses_actress ON movie_actresses(actress_id,movie_id);
                 CREATE INDEX IF NOT EXISTS idx_source_entries_movie ON source_entries(movie_id,source);
                 CREATE INDEX IF NOT EXISTS idx_magnets_movie ON magnets(movie_id);
-                CREATE INDEX IF NOT EXISTS idx_magnet_sources_entry ON magnet_sources(source_entry_id,magnet_id);
+                CREATE INDEX IF NOT EXISTS idx_magnet_sources_entry ON magnet_sources(source_entry_id,magnet_id);CREATE TABLE IF NOT EXISTS source_series(
+ id INTEGER PRIMARY KEY, source TEXT NOT NULL, name TEXT NOT NULL, url TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+ last_scanned_at TEXT NOT NULL DEFAULT '', last_completed_page INTEGER NOT NULL DEFAULT 0,
+ UNIQUE(source,url));
+CREATE TABLE IF NOT EXISTS scan_runs(
+ id INTEGER PRIMARY KEY, series_id INTEGER NOT NULL REFERENCES source_series(id) ON DELETE CASCADE,
+ status TEXT NOT NULL, current_page INTEGER NOT NULL DEFAULT 0, discovered INTEGER NOT NULL DEFAULT 0,
+ new_movies INTEGER NOT NULL DEFAULT 0, new_magnets INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0,
+ message TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL, finished_at TEXT NOT NULL DEFAULT '');
+CREATE INDEX IF NOT EXISTS idx_source_series_source ON source_series(source,enabled);
                 """
             )
             db.execute("UPDATE schema_meta SET value='2' WHERE key='schema_version'")
@@ -156,17 +172,23 @@ class LibraryDatabase:
             raise ValueError("影片名不能为空")
         normalized, now = normalize_title(title), self.now()
         fields = {
-            "studio": (studio or "").strip(),
-            "series": (series or "").strip(),
+            "studio": "" if is_invalid_metadata(studio) else (studio or "").strip(),
+            "series": "" if is_invalid_metadata(series) else (series or "").strip(),
             "release_date": (release_date or "").strip(),
             "cover_url": (cover_url or "").strip(),
             "duration_minutes": duration_minutes,
         }
         with self.connect() as db:
+            source_movie = None
+            if source and source_url:
+                source_movie = db.execute(
+                    "SELECT m.* FROM source_entries se JOIN movies m ON m.id=se.movie_id WHERE se.source=? AND se.source_url=?",
+                    (source, source_url),
+                ).fetchone()
             rows = db.execute(
                 "SELECT * FROM movies WHERE normalized_title=?", (normalized,)
             ).fetchall()
-            movie = next(
+            movie = source_movie or next(
                 (
                     row
                     for row in rows
@@ -214,11 +236,11 @@ class LibraryDatabase:
                     (
                         title,
                         normalized,
-                        cover_url,
-                        studio,
-                        series,
-                        release_date,
-                        duration_minutes,
+                        fields["cover_url"],
+                        fields["studio"],
+                        fields["series"],
+                        fields["release_date"],
+                        fields["duration_minutes"],
                         now,
                         now,
                     ),
@@ -289,10 +311,13 @@ class LibraryDatabase:
                    ) VALUES(?,?,?,?,?)""",
                 (movie_id, magnet, btih, size_bytes, self.now()),
             )
-            magnet_id = db.execute(
-                "SELECT id FROM magnets WHERE movie_id=? AND btih=?",
+            magnet_row = db.execute(
+                "SELECT id,size_bytes FROM magnets WHERE movie_id=? AND btih=?",
                 (movie_id, btih),
-            ).fetchone()["id"]
+            ).fetchone()
+            magnet_id = magnet_row["id"]
+            if (not magnet_row["size_bytes"] or magnet_row["size_bytes"] <= 0) and size_bytes:
+                db.execute("UPDATE magnets SET size_bytes=? WHERE id=?", (size_bytes, magnet_id))
             db.execute(
                 "INSERT OR IGNORE INTO magnet_sources VALUES(?,?)",
                 (magnet_id, entry["id"]),
@@ -657,3 +682,20 @@ class LibraryDatabase:
             return None
         path = Path(row["cover_path"])
         return path if path.is_file() else None
+
+
+    def list_source_series(self, source="javdb"):
+        with self.connect() as db:
+            return [dict(row) for row in db.execute("SELECT * FROM source_series WHERE source=? ORDER BY name,id",(source,))]
+
+    def save_source_series(self, name, url, enabled=True, series_id=None, source="javdb"):
+        name,url=str(name or '').strip(),str(url or '').strip()
+        if not name or not url.startswith(('https://','http://')): raise ValueError('请填写系列名称和有效网址')
+        with self.connect() as db:
+            if series_id:
+                db.execute("UPDATE source_series SET name=?,url=?,enabled=? WHERE id=? AND source=?",(name,url,int(bool(enabled)),series_id,source))
+                return int(series_id)
+            return db.execute("INSERT INTO source_series(source,name,url,enabled) VALUES(?,?,?,?)",(source,name,url,int(bool(enabled)))).lastrowid
+
+    def delete_source_series(self, series_id):
+        with self.connect() as db: return db.execute("DELETE FROM source_series WHERE id=?",(series_id,)).rowcount>0

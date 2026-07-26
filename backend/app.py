@@ -10,12 +10,14 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .db import LibraryDatabase
+from .scanner import ScanManager
 
 STATIC_DIR = Path(__file__).with_name("static")
 
 
 class Handler(BaseHTTPRequestHandler):
     database: LibraryDatabase | None = None
+    scans: ScanManager | None = None
 
     def _json(self, data, status=200):
         payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -74,6 +76,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": str(exc)}, 400)
             return
 
+        if path == "/api/sources/javdb/scan":
+            self._json(self.scans.status() if self.scans else {"status":"idle","running":False})
+            return
+
+        if path == "/api/sources/javdb":
+            self._json(self.database.list_source_series())
+            return
+
         if path == "/api/filters":
             self._json(self.database.get_filters())
             return
@@ -114,8 +124,35 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, TypeError) as exc:
             self._json({"error": str(exc)}, 400)
 
+    def do_DELETE(self):
+        assert self.database is not None
+        match = re.fullmatch(r"/api/sources/javdb/(\d+)", urlparse(self.path).path)
+        if not match:
+            self.send_error(404)
+            return
+        self._json({"deleted": self.database.delete_source_series(int(match.group(1)))})
+
+
     def do_POST(self):
         assert self.database is not None
+        action_match = re.fullmatch(r"/api/sources/javdb/(\d+)/(scan|continue|stop)", urlparse(self.path).path)
+        if action_match:
+            try:
+                if not self.scans: raise ValueError("扫描器未初始化")
+                action,series_id=action_match.group(2),int(action_match.group(1))
+                result=self.scans.stop() if action == "stop" else self.scans.start(series_id, action == "scan")
+                self._json(result, 202)
+            except (ValueError, TypeError) as exc:
+                self._json({"error":str(exc)},400)
+            return
+
+        if urlparse(self.path).path == "/api/sources/javdb":
+            try:
+                self._json({"id": self.database.save_source_series(**self._read_json())}, 201)
+            except (ValueError, TypeError) as exc:
+                self._json({"error": str(exc)}, 400)
+            return
+
         match = re.fullmatch(r"/api/movies/(\d+)/favorite", urlparse(self.path).path)
         if not match:
             self.send_error(404)
@@ -155,10 +192,10 @@ def main():
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
     Handler.database = LibraryDatabase(args.data_dir / "library.db")
+    Handler.scans = ScanManager(Handler.database)
     print(f"Yav V2 已启动：http://127.0.0.1:{args.port}")
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
 
 
 if __name__ == "__main__":
     main()
-
