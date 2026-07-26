@@ -147,7 +147,7 @@ class Handler(BaseHTTPRequestHandler):
         source = urlparse(self.path).path.split("/")[3]
         series_id = int(match.group(1))
         manager = self.scans if source == "javdb" else self.jphoo_scans
-        if manager and manager.is_running_series(series_id):
+        if (manager and manager.is_running_series(series_id)) or self.database.is_source_series_scanning(series_id, source):
             self._json({"error": "该系列正在扫描，请先停止扫描。"}, 409)
             return
         if not self.database.delete_source_series(series_id, source):

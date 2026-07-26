@@ -7,6 +7,7 @@ const state = {
   result: { items: [], total: 0, pages: 1 },
   filterData: null,
   currentMovie: null,
+  detailLastTrigger: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -186,6 +187,7 @@ async function toggleFavorite(id, nextValue, button) {
     });
     button.classList.toggle('is-active', result.favorite);
     button.textContent = result.favorite ? '♥' : '♡';
+    button.setAttribute('aria-label', result.favorite ? '取消收藏' : '添加收藏');
     const movie = state.result.items.find(item => item.id === Number(id));
     if (movie) movie.favorite = result.favorite;
     if (state.currentMovie?.id === Number(id)) state.currentMovie.favorite = result.favorite;
@@ -203,8 +205,10 @@ async function toggleFavorite(id, nextValue, button) {
 }
 
 async function openDetail(id) {
+  state.detailLastTrigger = document.activeElement;
   $('#detailOverlay').hidden = false;
   document.body.style.overflow = 'hidden';
+  $('#closeDetail').focus();
   $('#detailContent').innerHTML = '<div style="padding:100px;text-align:center">正在读取影片资料…</div>';
   try {
     state.currentMovie = await request(`/api/movies/${id}`);
@@ -294,11 +298,7 @@ async function saveEdit(form) {
   }
 }
 
-function closeDetail() {
-  $('#detailOverlay').hidden = true;
-  document.body.style.overflow = '';
-  state.currentMovie = null;
-}
+function closeDetail() { $('#detailOverlay').hidden = true; document.body.style.overflow = ''; state.currentMovie = null; state.detailLastTrigger?.focus(); }
 
 function clearFilters() {
   state.quick = 'all';
@@ -310,7 +310,7 @@ function clearFilters() {
   $('#actressFilter').value = '';
   $('#sourceFilter').value = '';
   $('#magnetFilter').value = '';
-  $$('.nav-item[data-quick]').forEach(item => item.classList.toggle('is-active', item.dataset.quick === 'all'));
+  $$('.nav-item[data-quick]').forEach(item => { const active=item.dataset.quick === 'all'; item.classList.toggle('is-active', active); active ? item.setAttribute('aria-current','page') : item.removeAttribute('aria-current'); });
   loadMovies({ scroll: true });
 }
 
@@ -358,7 +358,7 @@ function bindEvents() {
 
   $$('.nav-item[data-quick]').forEach(button => button.addEventListener('click', () => {
     state.quick = button.dataset.quick; state.page = 1;
-    $$('.nav-item[data-quick]').forEach(item => item.classList.toggle('is-active', item === button));
+    $$('.nav-item[data-quick]').forEach(item => { const active=item === button; item.classList.toggle('is-active', active); active ? item.setAttribute('aria-current','page') : item.removeAttribute('aria-current'); });
     loadMovies({ scroll: true });
   }));
 
@@ -397,7 +397,7 @@ function bindEvents() {
 
   $('#closeDetail').addEventListener('click', closeDetail);
   $('#detailOverlay').addEventListener('click', event => { if (event.target === $('#detailOverlay')) closeDetail(); });
-  document.addEventListener('keydown', event => { if (event.key === 'Escape' && !$('#detailOverlay').hidden) closeDetail(); });
+document.addEventListener('keydown', event => { if (event.key !== 'Escape') return; if (!$('#sourceOverlay').hidden) closeSources(); else if (!$('#detailOverlay').hidden) closeDetail(); });
 
   $('#detailContent').addEventListener('click', event => {
     const copy = event.target.closest('[data-copy]');
@@ -475,8 +475,8 @@ async function renderSources() {
   try { content.innerHTML = await sourcePanel('javdb', 'JavDB') + await sourcePanel('jphoo', 'JPHOO'); }
   catch (error) { content.innerHTML = `<p class="source-error">${escapeHtml(error.message)}</p>`; showToast(error.message); }
 }
-function openSources() { sourceLastTrigger = document.activeElement; $('#sourceOverlay').hidden = false; document.body.style.overflow = 'hidden'; renderSources().then(() => $('#closeSources').focus()); if (!sourcePollTimer) sourcePollTimer = setInterval(refreshSourceStatuses, 3000); }
-function closeSources() { $('#sourceOverlay').hidden = true; document.body.style.overflow = ''; clearInterval(sourcePollTimer); sourcePollTimer = null; sourceLastTrigger?.focus(); }
+function openSources() { sourceLastTrigger = document.activeElement; $('#openSources').setAttribute('aria-current','page'); $('#sourceOverlay').hidden = false; document.body.style.overflow = 'hidden'; renderSources().then(() => $('#closeSources').focus()); if (!sourcePollTimer) sourcePollTimer = setInterval(refreshSourceStatuses, 3000); }
+function closeSources() { $('#sourceOverlay').hidden = true; $('#openSources').removeAttribute('aria-current'); document.body.style.overflow = ''; clearInterval(sourcePollTimer); sourcePollTimer = null; sourceLastTrigger?.focus(); }
 async function refreshSourceStatuses() {
   if ($('#sourceOverlay').hidden || sourceOpBusy || document.activeElement?.closest('.source-form')) return;
   try {

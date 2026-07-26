@@ -52,7 +52,7 @@ def classify_magnet_candidate(current_title: str, candidate_title: str) -> str:
     current_code, candidate_code = _video_code(current_title), _video_code(candidate_title)
     if current_code and candidate_code:
         return "current" if current_code == candidate_code else "other"
-    if len(current_clean) >= 8 and (current_clean == candidate_clean or current_clean in candidate_clean or candidate_clean in current_clean):
+    if current_clean == candidate_clean or (min(len(current_clean), len(candidate_clean)) >= 8 and (current_clean in candidate_clean or candidate_clean in current_clean)):
         return "current"
     current, candidate = title_tokens(current_title), title_tokens(candidate_title)
     if len(current & candidate) >= 2:

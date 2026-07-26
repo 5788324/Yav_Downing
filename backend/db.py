@@ -720,6 +720,10 @@ CREATE INDEX IF NOT EXISTS idx_source_series_source ON source_series(source,enab
             row = db.execute("""SELECT sr.id AS run_id,sr.series_id,ss.name AS series_name,ss.source,sr.status,sr.current_page,sr.discovered,sr.processed_count,sr.new_movies,sr.new_magnets,sr.failures,sr.matched_current,sr.attached_other_movies,sr.unmatched_candidates,sr.last_error,sr.started_at,sr.finished_at FROM scan_runs sr JOIN source_series ss ON ss.id=sr.series_id WHERE ss.source=? ORDER BY sr.id DESC LIMIT 1""", (source,)).fetchone()
             return dict(row) if row else None
 
+    def is_source_series_scanning(self, series_id, source):
+        with self.connect() as db:
+            row = db.execute("SELECT 1 FROM scan_runs sr JOIN source_series ss ON ss.id=sr.series_id WHERE sr.series_id=? AND ss.source=? AND sr.status IN ('running','stopping') ORDER BY sr.id DESC LIMIT 1", (series_id, source)).fetchone()
+            return bool(row)
     def set_scan_stopping(self, series_id, source):
         with self.connect() as db:
             return db.execute("UPDATE scan_runs SET status='stopping' WHERE id=(SELECT sr.id FROM scan_runs sr JOIN source_series ss ON ss.id=sr.series_id WHERE sr.series_id=? AND ss.source=? AND sr.status='running' ORDER BY sr.id DESC LIMIT 1)", (series_id, source)).rowcount > 0
