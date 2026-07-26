@@ -321,7 +321,8 @@ class JphooSessionManager:
                             return
                         self.close_after_scan.clear()
                         continue
-                    self._set(**result, scanning=False, status=result["status"], login="login_required" if result["status"] == "login_required" else self._snapshot().get("login", "unknown"))
+                    details = {key: value for key, value in result.items() if key != "status"}
+                    self._set(**details, scanning=False, status=result["status"], login="login_required" if result["status"] == "login_required" else self._snapshot().get("login", "unknown"))
                 elif command in {"close", "shutdown"}:
                     self._close_browser()
                     if command == "shutdown":

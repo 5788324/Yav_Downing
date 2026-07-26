@@ -196,4 +196,4 @@
 - [x] 普通 ScanManager 与 JPHOO 会话都有带超时的 shutdown 等待接口；超时只写脱敏日志。
 - [x] runtime 使用原子实例/密钥文件、Windows PID 退出状态检测和独占哨兵，避免 PID 复用或并发启动误判。
 - [x] 源码及打包版完成隔离退出、备份、恢复和 V1 迁移验收；临时目录已删除。
-- [ ] 重新取得临时已登录 JPHOO profile 后，完成 RC4 打包版真实扫描退出复验。
+- [x] RC4 打包版真实 JPHOO profile 复验：ready、扫描/停止/继续、页面退出、扫描中 CLI 退出和重启均通过。

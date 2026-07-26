@@ -51,6 +51,14 @@ class BlockingScanner:
         return {"status": "stopped", "page": 1, "message": "", "discovered": 0, "processed": 0, "new_movies": 0, "new_magnets": 0, "failures": 0, "matched_current": 0, "attached_other_movies": 0, "unmatched_candidates": 0}
 
 
+class ImmediateScanner:
+    def __init__(self, _database, _profile_dir, source=None):
+        self.source = source
+    def stop(self):
+        pass
+    def run(self, _series_id, _from_start=False):
+        return {"status": "stopped", "page": 1, "message": "", "discovered": 0, "processed": 0, "new_movies": 0, "new_magnets": 0, "failures": 0}
+
 def wait_for(manager, predicate):
     deadline = time.time() + 3
     while time.time() < deadline:
@@ -142,5 +150,13 @@ class JphooSessionTests(unittest.TestCase):
         self.assertEqual(self.db.latest_scan_status("jphoo")["status"], "stopping")
 
 
+
+    def test_completed_scan_result_keeps_its_status(self):
+        self.ready_session()
+        with patch("backend.scanner.JphooScanner", ImmediateScanner):
+            self.manager.start(self.series_id)
+            state = wait_for(self.manager, lambda state: not state["running"] and state["status"] == "stopped")
+        self.assertEqual(state["status"], "stopped")
+        self.assertNotIn("multiple values", state.get("message", ""))
 if __name__ == "__main__":
     unittest.main()

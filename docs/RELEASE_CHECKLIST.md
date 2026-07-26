@@ -32,7 +32,7 @@
 - [x] 打包 RC4：仓库外副本启动，首页、`/api/filters`、`/api/app/status` 均可用；页面实际 bootstrap/Origin/POST 协议获得 202 后服务断开并清理 runtime；打包 CLI 再次验证退出。
 - [x] 打包备份、dry-run 恢复、正式恢复与合成 V1 迁移均在临时数据目录通过；备份 manifest 不含 runtime，V1 哈希未变且二次迁移幂等。
 - [x] 自动验证 46 项通过。
-- [ ] RC4 已登录 JPHOO 打包版真实扫描复验：旧临时 profile 目录已空，不能伪造通过；需要新的独立临时已登录 profile 后完成 ready→扫描→停止/继续→页面退出→重启→扫描中退出链路。
+- [x] RC4 已登录 JPHOO 打包版真实扫描复验：复制临时 profile 后连续重启均为 ready；扫描进入 running，停止进入 stopping 后收敛为 stopped；页面和 CLI 的扫描中退出均释放 Edge、端口、锁与 runtime。
 - [ ] Windows Sandbox/全新用户环境验收仍未完成。
 
-发布产物：`release\Yav-V2-2.0.0-rc4\Yav-V2.exe`，SHA-256 为 `A428C87755B12E77B6D980FCF28AFC930FF4F6ED01602B2AC641542313C5BA72`；发布产物不提交 Git。
+发布产物：`release\Yav-V2-2.0.0-rc4\Yav-V2.exe`，SHA-256 为 `4580E84B5611D91BD3A50B0D9329B2A458A73878C6BB2F730C143B11827111A1`；发布产物不提交 Git。

@@ -176,3 +176,9 @@
 - 运行文件：临时 `runtime\instance.json` 保存 PID/端口/实例 ID/版本，`runtime\shutdown.secret` 单独保存凭据；均原子写入。Windows PID 查询同时检查退出码，避免已退出进程句柄或 PID 复用误判。
 - 验证：46 项自动测试通过；源码及 RC4 EXE 在独立临时目录完成状态、第二实例、页面协议退出、CLI 退出、端口/进程/runtime 清理、备份/恢复和合成 V1 迁移验证。所有临时目录已删除。
 - 发布状态：RC4 不宣称正式通过。新的 JPHOO 真实已登录打包扫描复验仍被空临时 profile 阻塞；Windows Sandbox/全新用户验收仍待完成。
+## RC4 JPHOO 打包版真实复验（2026-07-27）
+
+- 使用 `C:\tmp\yav-jphoo-real-20260726` 的临时数据库和 profile 副本，未读取 Cookie、未修改原 profile 或正式数据。
+- RC4 EXE 打开会话后为 `ready`；真实扫描可进入 `running`，停止请求为 `stopping` 并最终为 `stopped`。修复扫描结果重复传入 `status` 导致误报 `failed` 的缺陷，并加入回归测试。
+- 继续扫描期间通过页面 bootstrap/Origin/POST 的安全退出，以及独立扫描期间通过 CLI `--shutdown`，均释放 Edge、Yav 进程、端口和 runtime。两次退出后重启仍为 `ready`，没有反复登录。
+- JPHOO 打包版发布阻塞项已完成；全新 Windows/Sandbox 环境验收仍待完成。

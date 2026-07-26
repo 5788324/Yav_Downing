@@ -184,6 +184,12 @@
 - 修正 Windows `os.kill(pid, 0)` 不可靠的问题，改为 `OpenProcess` + `GetExitCodeProcess`；新增独占 `instance.lock` 防止并发启动竞争，并仅把同一端口、同一 instance ID 的 Yav 视为活跃实例。
 - shutdown handler 先发送 202，随后启动独立非 daemon 控制线程；顺序为 JavDB 停止/等待、JPHOO 停止/等待/关闭、HTTP shutdown、server_close、运行文件和实例锁释放。前端改为 202 后显示退出界面、轮询状态并把本地连接断开视为成功。
 - 自动测试增至 46 项，覆盖真实 ThreadingHTTPServer 生命周期、403/415/Origin 校验、重复关闭、旧 token、端口释放、凭据分离、误目标 CLI、陈旧锁/PID 复用及普通扫描 shutdown。
-- 生成 `release\Yav-V2-2.0.0-rc4\Yav-V2.exe`（54,962,088 bytes，SHA-256 `A428C87755B12E77B6D980FCF28AFC930FF4F6ED01602B2AC641542313C5BA72`）。源码和 EXE 均在 C:\tmp 隔离目录验收后删除临时文件。
+- 生成 `release\Yav-V2-2.0.0-rc4\Yav-V2.exe`（54,962,613 bytes，SHA-256 `4580E84B5611D91BD3A50B0D9329B2A458A73878C6BB2F730C143B11827111A1`）。源码和 EXE 均在 C:\tmp 隔离目录验收后删除临时文件。
 - RC4 打包版备份/恢复/合成 V1 迁移验证通过；旧 V1 哈希不变、二次迁移幂等、备份 manifest 未包含 runtime。
 - JPHOO RC4 已登录真实扫描未伪造为通过：历史临时 profile 目录均为空，需新的独立临时 profile 才能完成最终发布阻塞验收。
+## 2026-07-27：RC4 JPHOO 真实复验完成
+
+- 复制历史临时 JPHOO profile 到新的隔离目录后，RC4 EXE 登录会话为 `ready`；扫描真实进入 `running`，停止由 `stopping` 正确收敛为 `stopped`。
+- 修复 `JphooSessionManager` 将含 `status` 的扫描结果再次作为显式 `status` 传入 `_set()` 的错误；此前会报“multiple values for keyword argument status”并错误显示 `failed`。新增完成扫描状态回归测试。
+- 继续扫描时页面安全退出、扫描中 CLI 安全退出均释放 Edge、进程、端口和 runtime；连续重启后仍为 `ready`。隔离目录已删除，未修改正式资料或原临时 profile。
+- 当前仅剩全新 Windows/Sandbox 环境验收，RC4 JPHOO 发布阻塞项已消除。
