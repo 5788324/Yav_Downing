@@ -65,3 +65,11 @@ V1 的现有代码和研究记录仍保留在仓库中，供迁移 JavDB/JPHOO �
 ## 当前状态
 
 V2 已进入准备阶段：旧版已冻结，正在整理新版数据结构、界面和旧数据迁移方案。
+## V2 开发启动
+
+```powershell
+cd "G:\Antigravity\Yav_Downing-v2"
+python -m backend.app
+```
+
+服务只监听 `127.0.0.1:8765`，SQLite 默认保存在 `%LOCALAPPDATA%\Yav\v2\library.db`，不写入仓库。

@@ -34,3 +34,11 @@
 - 本次执行环境无法直接连接 GitHub 域名，因此无法替用户电脑创建持久化本地 worktree；远端分支和文档提交不受影响。
 - V1 的 JavDB/JPHOO 抓取代码尚未迁移到 V2。
 - V2 目前还没有可运行界面。
+## 2026-07-26 阶段 0 与阶段 1 完成
+
+- 已在 `G:\Antigravity\Yav_Downing-v2` 建立独立 V2 worktree；当前分支为 `v2-rebuild`。
+- V1 数据只读统计：4,058 部影片、3,894 条磁链、0 个本地封面文件；未改动任何旧数据。
+- 已建立最小 SQLite 表：`movies`、`actresses`、`movie_actresses`、`source_entries`、`magnets`、`magnet_sources` 与 `schema_meta`。
+- 已提供影片新增/补空、来源关联、演员去重、BTIH 去重与本机中文空图书馆页面。
+- JavDB/JPHOO 目前仅有来源接口占位；V1 解析、扫描和迁移尚未开始。
+- 验证：Python 编译（`backend/db.py`、`backend/app.py`）及临时 SQLite 创建、双来源同 BTIH 去重通过。

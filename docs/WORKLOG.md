@@ -33,3 +33,10 @@
 - 在用户本机建立 `v2-rebuild` worktree。
 - 备份并统计 V1 数据。
 - 确定 V2 UI 技术方案和最小数据库结构。
+## 2026-07-26：完成阶段 0 与阶段 1 最小骨架
+
+- 创建本机 `v2-rebuild` worktree，保留 `main` 的未跟踪用户文件和 V1 数据不变。
+- 选择 Python 标准库 HTTP 服务 + SQLite：无需新增依赖，适合 Windows 本地运行，后续可直接迁入现有 Python 抓取代码。
+- 新建 `backend/db.py` 和 `backend/sources/`；同一影片同 BTIH 只保存一条磁链，并以 `magnet_sources` 保留多个来源。
+- 新增本机中文图书馆空页与明确启动命令；服务固定监听 `127.0.0.1`。
+- 下一步：实现完整筛选/详情/编辑 API 和 UI，再开始可重复执行的 V1 数据迁移。
