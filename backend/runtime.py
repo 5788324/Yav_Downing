@@ -10,7 +10,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from urllib.request import urlopen
 
-APP_VERSION = "2.0.0-rc1"
+APP_VERSION = "2.0.0-rc2"
 
 
 def default_data_dir() -> Path:

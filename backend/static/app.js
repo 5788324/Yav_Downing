@@ -517,3 +517,15 @@ if (button.dataset.login) { const series=$('#jphooLoginSeries'); const payload=b
   const id = button.dataset.scan || button.dataset.continue || button.dataset.stop;
   if (action) sourceAction(button, () => request(`/api/sources/${source}/${id}/${action}`, {method:'POST',body:'{}'}));
 });
+
+$('#shutdownApp')?.addEventListener('click', async () => {
+  if (!confirm('退出会停止正在进行的扫描并关闭 Yav。是否继续？')) return;
+  const button = $('#shutdownApp'); button.disabled = true; button.textContent = '正在安全退出…';
+  try {
+    const boot = window.__YAV_BOOTSTRAP__ || {};
+    const response = await fetch('/api/app/shutdown', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({token: boot.shutdownToken, instance_id: boot.instanceId})});
+    if (response.status !== 202) throw new Error('关闭请求被拒绝');
+    document.body.innerHTML = '<main class="empty-state"><h3>Yav 正在安全退出…</h3></main>';
+    setTimeout(() => { document.body.innerHTML = '<main class="empty-state"><h3>Yav 已安全退出，可以关闭此页面。</h3></main>'; }, 900);
+  } catch (error) { button.disabled = false; button.textContent = '安全退出 Yav'; showToast(error.message); }
+});

@@ -199,7 +199,7 @@ class JphooSessionManager:
     def check(self):
         if not self.series_id:
             raise ValueError("请先打开一个 JPHOO 系列会话")
-        self._set(status="checking", login="checking")
+        self._set(status="checking", login="checking", last_verified_at="")
         self._post("check", series_id=self.series_id)
         return self.status()
 

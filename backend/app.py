@@ -6,6 +6,9 @@ import mimetypes
 import os
 import re
 import webbrowser
+import secrets
+import threading
+import time
 from threading import Timer
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -14,6 +17,37 @@ from urllib.parse import parse_qs, unquote, urlparse
 from .db import LibraryDatabase
 from .scanner import ScanManager, JphooSessionManager
 
+
+class ApplicationRuntime:
+    def __init__(self, server, scans, jphoo_session, shutdown_token):
+        self.server, self.scans, self.jphoo_session = server, scans, jphoo_session
+        self.shutdown_token = shutdown_token
+        self.instance_id = secrets.token_urlsafe(12)
+        self.shutdown_pending = False
+        self._lock = threading.Lock()
+
+    def status(self):
+        javdb = bool(self.scans and self.scans.status().get("running"))
+        jphoo = bool(self.jphoo_session and self.jphoo_session.status().get("running"))
+        return {"app":"Yav", "version":"2.0.0-rc2", "instance_id":self.instance_id,
+                "status":"shutting_down" if self.shutdown_pending else "running",
+                "shutdown_pending":self.shutdown_pending, "javdb_running":javdb, "jphoo_running":jphoo}
+
+    def request_shutdown(self, reason="api"):
+        with self._lock:
+            if self.shutdown_pending:
+                return False
+            self.shutdown_pending = True
+        threading.Thread(target=self.graceful_shutdown, args=(reason,), daemon=False, name="yav-shutdown").start()
+        return True
+
+    def graceful_shutdown(self, reason):
+        try:
+            if self.scans: self.scans.stop()
+            if self.jphoo_session: self.jphoo_session.stop()
+            if self.jphoo_session: self.jphoo_session.shutdown()
+        finally:
+            self.server.shutdown()
 STATIC_DIR = Path(__file__).with_name("static")
 
 
@@ -22,6 +56,7 @@ class Handler(BaseHTTPRequestHandler):
     scans: ScanManager | None = None
     jphoo_scans: JphooSessionManager | None = None
     jphoo_login: JphooSessionManager | None = None
+    runtime: ApplicationRuntime | None = None
 
     def _json(self, data, status=200):
         payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -59,6 +94,10 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
         query = parse_qs(parsed.query)
+
+        if path == "/api/app/status":
+            self._json(self.runtime.status() if self.runtime else {"status":"starting"})
+            return
 
         if path == "/api/movies":
             try:
@@ -120,7 +159,10 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/":
-            self._serve_file(STATIC_DIR / "index.html", cache=False)
+            bootstrap = json.dumps({"instanceId": self.runtime.instance_id, "shutdownToken": self.runtime.shutdown_token}, ensure_ascii=False)
+            content = (STATIC_DIR / "index.html").read_text(encoding="utf-8").replace("</body>", f"<script>window.__YAV_BOOTSTRAP__ = {bootstrap};</script></body>")
+            payload = content.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(payload))); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(payload)
             return
         if path.startswith("/assets/"):
             filename = Path(path.removeprefix("/assets/")).name
@@ -160,6 +202,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         assert self.database is not None
+        if urlparse(self.path).path == "/api/app/shutdown":
+            try: payload = self._read_json()
+            except ValueError: self._json({"error":"请求内容不是有效 JSON"}, 400); return
+            token = payload.get("token") if isinstance(payload, dict) else None
+            instance_id = payload.get("instance_id") if isinstance(payload, dict) else None
+            origin, host = self.headers.get("Origin", ""), self.headers.get("Host", "")
+            local = host.startswith("127.0.0.1:") and (not origin or origin.startswith("http://127.0.0.1:"))
+            if not (self.runtime and isinstance(token, str) and isinstance(instance_id, str) and local and secrets.compare_digest(token, self.runtime.shutdown_token) and secrets.compare_digest(instance_id, self.runtime.instance_id)):
+                self._json({"error":"无权关闭 Yav"}, 403); return
+            already = not self.runtime.request_shutdown()
+            self._json({"status":"shutting_down", "already_pending":already}, 202); return
         action_match = re.fullmatch(r"/api/sources/javdb/(\d+)/(scan|continue|stop)", urlparse(self.path).path)
         if action_match:
             try:
@@ -259,6 +312,9 @@ def main():
     jphoo_session = JphooSessionManager(Handler.database, args.data_dir / "browser-profile" / "jphoo")
     Handler.jphoo_scans = Handler.jphoo_login = jphoo_session
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    Handler.runtime = ApplicationRuntime(server, Handler.scans, jphoo_session, secrets.token_urlsafe(32))
+    credential_path = args.data_dir / "yav.shutdown.json"
+    credential_path.write_text(json.dumps({"pid": os.getpid(), "port": args.port, "instance_id": Handler.runtime.instance_id, "token": Handler.runtime.shutdown_token}), encoding="utf-8")
     url = f"http://127.0.0.1:{args.port}"
     print(f"Yav V2 已启动：{url}")
     if args.open_browser:
@@ -268,6 +324,7 @@ def main():
     finally:
         jphoo_session.shutdown()
         server.server_close()
+        credential_path.unlink(missing_ok=True)
 
 if __name__ == "__main__":
     main()

@@ -5,6 +5,7 @@ import argparse
 import json
 import sys
 import webbrowser
+from urllib.request import Request, urlopen
 from pathlib import Path
 
 from backend.app import main as serve_app
@@ -24,6 +25,7 @@ def parse_args(argv=None):
     parser.add_argument("--restore", type=Path, metavar="备份目录")
     parser.add_argument("--migrate-v1", type=Path, metavar="V1数据库")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--shutdown", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -37,6 +39,24 @@ def _message(text: str, title: str = "Yav V2") -> None:
 
 def _run_command(args, logger) -> int:
     data_dir = args.data_dir.expanduser().resolve()
+    if args.shutdown:
+        credential = data_dir / "yav.shutdown.json"
+        if not credential.is_file():
+            print(json.dumps({"status": "not_running"}, ensure_ascii=False)); return 0
+        try:
+            info = json.loads(credential.read_text(encoding="utf-8"))
+            port, instance_id = int(info["port"]), str(info["instance_id"])
+            with urlopen(f"http://127.0.0.1:{port}/api/app/status", timeout=2) as response:
+                status = json.loads(response.read())
+            if status.get("app") != "Yav" or status.get("instance_id") != instance_id:
+                raise RuntimeError("目标不是当前 Yav 实例")
+            body = json.dumps({"token": info["token"], "instance_id": instance_id}).encode("utf-8")
+            request = Request(f"http://127.0.0.1:{port}/api/app/shutdown", data=body, headers={"Content-Type": "application/json"}, method="POST")
+            with urlopen(request, timeout=3) as response: response.read()
+            print(json.dumps({"status": "shutting_down", "port": port}, ensure_ascii=False)); return 0
+        except Exception:
+            credential.unlink(missing_ok=True)
+            print(json.dumps({"status": "not_running"}, ensure_ascii=False)); return 0
     if args.backup:
         report = backup_data_dir(data_dir)
         logger.info("备份完成 path=%s covers=%s", report["backup_dir"], report["copied_covers"])

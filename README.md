@@ -126,3 +126,7 @@ V1 的现有代码和研究记录仍保留在仓库中，供迁移 JavDB/JPHOO �
 ## Windows 使用
 
 发布版支持 --data-dir、--port、--no-browser、--backup、--restore、--migrate-v1 和 --dry-run。详见 [Windows 安装](docs/INSTALL_WINDOWS.md)、[V1 迁移](docs/MIGRATE_V1_TO_V2.md)、[备份恢复](docs/BACKUP_RESTORE.md) 和 [发布清单](docs/RELEASE_CHECKLIST.md)。
+
+## RC2 安全退出
+
+关闭浏览器不会退出 Yav。请使用页面中的“安全退出 Yav”或 `Yav-V2.exe --shutdown`；两者都会停止扫描并释放本地端口、锁和临时运行凭据。RC1 因缺少正常退出入口未完成单实例验收；RC2 已完成打包版 CLI 退出验证。JPHOO 打包版真实登录与扫描仍是发布阻塞项。
