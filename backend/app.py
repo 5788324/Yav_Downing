@@ -1,18 +1,158 @@
 from __future__ import annotations
-import argparse,json,os
-from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+
+import argparse
+import json
+import mimetypes
+import os
+import re
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs,urlparse
+from urllib.parse import parse_qs, unquote, urlparse
+
 from .db import LibraryDatabase
-PAGE="""<!doctype html><meta charset=utf-8><title>Yav V2</title><body style='font-family:Microsoft YaHei UI;margin:40px'><h1>Yav V2 图书馆</h1><p>本地资料库已就绪；来源抓取将在后续阶段迁移。</p><input id=q placeholder='搜索影片名'><button onclick='go()'>搜索</button><ul id=r></ul><script>async function go(){let x=await fetch('/api/movies?query='+encodeURIComponent(q.value));let a=await x.json();r.innerHTML=a.length?a.map(m=>`<li>${m.favorite?'★ ':''}${m.title} · 磁链 ${m.magnet_count}</li>`).join(''):'<li>暂无影片</li>'}go()</script></body>"""
+
+STATIC_DIR = Path(__file__).with_name("static")
+
+
 class Handler(BaseHTTPRequestHandler):
-    database=None
+    database: LibraryDatabase | None = None
+
+    def _json(self, data, status=200):
+        payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _read_json(self):
+        length = int(self.headers.get("Content-Length", "0") or 0)
+        if not length:
+            return {}
+        try:
+            return json.loads(self.rfile.read(length).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("请求内容不是有效 JSON") from exc
+
+    def _serve_file(self, path: Path, cache=True):
+        if not path.is_file():
+            self.send_error(404)
+            return
+        content = path.read_bytes()
+        mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Cache-Control", "public, max-age=3600" if cache else "no-store")
+        self.end_headers()
+        self.wfile.write(content)
+
     def do_GET(self):
-        if self.path.startswith('/api/movies'):
-            q=parse_qs(urlparse(self.path).query).get('query',[''])[0]; data=json.dumps(self.database.list_movies(q),ensure_ascii=False).encode(); self.send_response(200); self.send_header('Content-Type','application/json; charset=utf-8'); self.end_headers(); self.wfile.write(data)
-        elif self.path=='/': self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.end_headers(); self.wfile.write(PAGE.encode())
-        else: self.send_error(404)
-    def log_message(self,*args): pass
+        assert self.database is not None
+        parsed = urlparse(self.path)
+        path = unquote(parsed.path)
+        query = parse_qs(parsed.query)
+
+        if path == "/api/movies":
+            try:
+                favorite = self._optional_bool(query.get("favorite", [""])[0])
+                has_magnet = self._optional_bool(query.get("has_magnet", [""])[0])
+                result = self.database.list_movies(
+                    query=query.get("q", query.get("query", [""]))[0],
+                    studio=query.get("studio", [""])[0],
+                    series=query.get("series", [""])[0],
+                    actress=query.get("actress", [""])[0],
+                    favorite=favorite,
+                    has_magnet=has_magnet,
+                    source=query.get("source", [""])[0],
+                    page=query.get("page", [1])[0],
+                    page_size=query.get("page_size", [36])[0],
+                )
+                self._json(result)
+            except (ValueError, TypeError) as exc:
+                self._json({"error": str(exc)}, 400)
+            return
+
+        if path == "/api/filters":
+            self._json(self.database.get_filters())
+            return
+
+        detail_match = re.fullmatch(r"/api/movies/(\d+)", path)
+        if detail_match:
+            movie = self.database.get_movie(int(detail_match.group(1)))
+            self._json(movie or {"error": "影片不存在"}, 200 if movie else 404)
+            return
+
+        cover_match = re.fullmatch(r"/api/movies/(\d+)/cover", path)
+        if cover_match:
+            cover = self.database.get_cover_path(int(cover_match.group(1)))
+            if cover:
+                self._serve_file(cover)
+            else:
+                self.send_error(404)
+            return
+
+        if path == "/":
+            self._serve_file(STATIC_DIR / "index.html", cache=False)
+            return
+        if path.startswith("/assets/"):
+            filename = Path(path.removeprefix("/assets/")).name
+            self._serve_file(STATIC_DIR / filename)
+            return
+        self.send_error(404)
+
+    def do_PATCH(self):
+        assert self.database is not None
+        match = re.fullmatch(r"/api/movies/(\d+)", urlparse(self.path).path)
+        if not match:
+            self.send_error(404)
+            return
+        try:
+            movie = self.database.update_movie(int(match.group(1)), self._read_json())
+            self._json(movie or {"error": "影片不存在"}, 200 if movie else 404)
+        except (ValueError, TypeError) as exc:
+            self._json({"error": str(exc)}, 400)
+
+    def do_POST(self):
+        assert self.database is not None
+        match = re.fullmatch(r"/api/movies/(\d+)/favorite", urlparse(self.path).path)
+        if not match:
+            self.send_error(404)
+            return
+        try:
+            payload = self._read_json()
+            favorite = bool(payload.get("favorite"))
+            if not self.database.set_favorite(int(match.group(1)), favorite):
+                self._json({"error": "影片不存在"}, 404)
+                return
+            self._json({"id": int(match.group(1)), "favorite": favorite})
+        except (ValueError, TypeError) as exc:
+            self._json({"error": str(exc)}, 400)
+
+    @staticmethod
+    def _optional_bool(value):
+        if value in (None, ""):
+            return None
+        return str(value).lower() in {"1", "true", "yes", "on"}
+
+    def log_message(self, *_args):
+        pass
+
+
 def main():
-    p=argparse.ArgumentParser(); p.add_argument('--data-dir',type=Path,default=Path(os.environ.get('LOCALAPPDATA',Path.home()))/'Yav'/'v2'); p.add_argument('--port',type=int,default=8765); a=p.parse_args(); Handler.database=LibraryDatabase(a.data_dir/'library.db'); print(f'Yav V2 已启动：http://127.0.0.1:{a.port}'); ThreadingHTTPServer(('127.0.0.1',a.port),Handler).serve_forever()
-if __name__=='__main__': main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Yav" / "v2",
+    )
+    parser.add_argument("--port", type=int, default=8765)
+    args = parser.parse_args()
+    Handler.database = LibraryDatabase(args.data_dir / "library.db")
+    print(f"Yav V2 已启动：http://127.0.0.1:{args.port}")
+    ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
+
+
+if __name__ == "__main__":
+    main()
