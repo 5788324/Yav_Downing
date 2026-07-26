@@ -137,3 +137,9 @@
 - 登录状态不再因任意 Cookie/localStorage 直接显示 `ready`：除非检测到受保护的用户菜单或认证命名存储标记，否则保持 `unknown`。
 - 新增隔离回归：扫描中 close、扫描中 shutdown、线程结束、browser closed、scanner 清空和数据库 `stopping` 状态；全套 30 项测试通过。
 - 新临时 V2 副本真实验证：真实 JPHOO 扫描已启动后立即 shutdown，线程与 browser 均释放，最终状态 `closed / unknown`；重开同一复制 Profile 的登录验证仍为 `ready`。
+
+## 2026-07-26：本地备份
+
+- 新增 `python -m backend.backup`：用 SQLite backup API 在原库仍可使用时创建一致快照。
+- 同一时间戳目录保存 `library.db`、存在的本地封面副本和 `manifest.json`；缺失封面只记录影片 ID，远程封面不下载。
+- 原数据库、原封面和 V1 数据均只读；备份目录不可覆盖。

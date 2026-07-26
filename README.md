@@ -74,6 +74,25 @@ python -m backend.migrate_v1 `
 
 确认统计后增加 `--apply` 才实际写入。
 
+
+## V2 数据备份
+
+备份只读取原数据库和本地封面文件，不会修改原数据，也不会覆盖已有备份。默认备份目录是 `%LOCALAPPDATA%\Yav\v2\backups`：
+
+```powershell
+python -m backend.backup `
+  --data-dir "$env:LOCALAPPDATA\Yav\v2"
+```
+
+也可使用自定义备份位置：
+
+```powershell
+python -m backend.backup `
+  --data-dir "$env:LOCALAPPDATA\Yav\v2" `
+  --output-dir "D:\Yav-Backups"
+```
+
+每个备份目录包含 `library.db`、存在的本地封面副本，以及 `manifest.json`。远程封面网址保留在数据库中，不会重复下载。
 ## 分支说明
 
 - `v1-frozen`：旧版冻结基线，不再增加功能。
@@ -91,4 +110,4 @@ V1 的现有代码和研究记录仍保留在仓库中，供迁移 JavDB/JPHOO �
 
 ## JPHOO 来源扫描
 
-在左侧导航打开“来源管理”，在 JPHOO 区域配置系列。首次使用时点击“打开登录窗口”，只在 Yav V2 专用 Edge 中手动登录；完成后点击“完成登录”，再执行全量扫描或继续扫描。登录资料保存在 `%LOCALAPPDATA%\Yav\v2\browser-profile\jphoo`，不会提交到仓库。
+在左侧导航打开“来源管理”，在 JPHOO 区域配置系列。首次使用时点击“打开登录窗口”，只在 Yav V2 专用 Edge 中手动登录；登录完成后点击“验证登录”；显示 ready 后可执行全量扫描或继续扫描。扫描期间关闭会话或退出程序会先安全停止扫描，再释放浏览器 Profile。登录资料保存在 `%LOCALAPPDATA%\Yav\v2\browser-profile\jphoo`，不会提交到仓库。
