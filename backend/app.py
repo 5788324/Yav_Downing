@@ -29,7 +29,7 @@ class ApplicationRuntime:
     def status(self):
         javdb = bool(self.scans and self.scans.status().get("running"))
         jphoo = bool(self.jphoo_session and self.jphoo_session.status().get("running"))
-        return {"app":"Yav", "version":"2.0.0-rc2", "instance_id":self.instance_id,
+        return {"app":"Yav", "version":"2.0.0-rc3", "instance_id":self.instance_id,
                 "status":"shutting_down" if self.shutdown_pending else "running",
                 "shutdown_pending":self.shutdown_pending, "javdb_running":javdb, "jphoo_running":jphoo}
 

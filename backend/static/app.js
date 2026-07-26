@@ -148,8 +148,8 @@ function renderMovies() {
   grid.innerHTML = items.map(movieCard).join('');
   $('#emptyState').hidden = items.length > 0;
   if (total === 0) {
-    $('emptyState h3').textContent = '资料库为空';
-    $('emptyState p').textContent = '可以创建空资料库，或使用 Yav V1 导入入口迁移现有资料。';
+    $('#emptyState h3').textContent = '资料库为空';
+    $('#emptyState p').textContent = '可以创建空资料库，或使用 Yav V1 导入入口迁移现有资料。';
   }
   $('#pagination').hidden = total === 0;
   $('#resultSummary').textContent = `当前筛选找到 ${total.toLocaleString('zh-CN')} 部影片`;
