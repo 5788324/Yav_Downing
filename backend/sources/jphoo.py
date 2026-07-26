@@ -39,36 +39,44 @@ def title_tokens(value: str) -> set[str]:
     return {item for item in normalize_jphoo_title(value).split() if len(item) > 1 and item not in _NOISE and not item.isdigit()}
 
 
+def _video_code(value: str) -> str:
+    hit = re.search(r"\b([a-z]{2,})\s*[-_. ]\s*(\d{2,})\b", normalize_jphoo_title(value), re.I)
+    return f"{hit.group(1)}-{hit.group(2)}".upper() if hit else ""
+
+
 def classify_magnet_candidate(current_title: str, candidate_title: str) -> str:
-    """只把明确标题匹配的磁链归到当前影片，避免同日资源误归属。"""
-    current, candidate = title_tokens(current_title), title_tokens(candidate_title)
-    if not current or not candidate:
+    """宁可 unknown，也不以短词或数字把同日资源归错。"""
+    current_clean, candidate_clean = normalize_jphoo_title(current_title), normalize_jphoo_title(candidate_title)
+    if not current_clean or not candidate_clean:
         return "unknown"
-    if current <= candidate or candidate <= current:
+    current_code, candidate_code = _video_code(current_title), _video_code(candidate_title)
+    if current_code and candidate_code:
+        return "current" if current_code == candidate_code else "other"
+    if len(current_clean) >= 8 and (current_clean == candidate_clean or current_clean in candidate_clean or candidate_clean in current_clean):
         return "current"
-    overlap = len(current & candidate)
-    required = 2 if len(current) >= 2 else 1
-    if overlap >= required:
+    current, candidate = title_tokens(current_title), title_tokens(candidate_title)
+    if len(current & candidate) >= 2:
         return "current"
-    # 其他片必须有可识别番号，纯文件名/大小文字始终 unknown。
-    return "other" if re.search(r"[a-z]{2,}[-_ ]?\d{2,}", normalize_jphoo_title(candidate_title), re.I) else "unknown"
+    return "other" if candidate_code else "unknown"
 
 
 def api_candidates(payload) -> list[JphooCandidate]:
+    """只从明确标题字段读取标题；infoHash 只用于构造 BTIH。"""
     found: list[JphooCandidate] = []
+    title_keys = ("name", "title", "videoTitle", "workTitle", "fileName", "filename")
     def walk(value):
         if isinstance(value, dict):
-            strings = [str(item) for item in value.values() if isinstance(item, (str, int, float))]
-            label = " ".join(strings)
+            explicit_title = next((value[key] for key in title_keys if value.get(key)), "")
+            title = BeautifulSoup(str(explicit_title), "lxml").get_text(" ", strip=True)
             numeric_length = value.get("length") or value.get("size_bytes") or value.get("size")
             raw_bytes = int(numeric_length) if str(numeric_length or "").isdigit() else 0
-            record_size = max(max((size_bytes(item) or 0 for item in strings), default=0), raw_bytes) or None
-            found.extend(JphooCandidate(item, record_size, label) for item in strings if item.startswith("magnet:"))
+            record_size = raw_bytes or size_bytes(str(numeric_length or "")) or size_bytes(title)
+            magnets = [str(item) for item in value.values() if isinstance(item, str) and item.startswith("magnet:")]
+            found.extend(JphooCandidate(magnet, record_size, title) for magnet in magnets)
             info_hash = str(value.get("infoHash") or value.get("info_hash") or "").strip()
-            if re.fullmatch(r"[A-Za-z0-9]{32,64}", info_hash) and not any(item.startswith("magnet:") for item in strings):
-                name = BeautifulSoup(str(value.get("name") or value.get("title") or ""), "lxml").get_text(" ", strip=True)
-                magnet = f"magnet:?xt=urn:btih:{info_hash.upper()}" + (f"&dn={quote(name)}" if name else "")
-                found.append(JphooCandidate(magnet, record_size, label))
+            if re.fullmatch(r"[A-Za-z0-9]{32,64}", info_hash) and not magnets:
+                magnet = f"magnet:?xt=urn:btih:{info_hash.upper()}" + (f"&dn={quote(title)}" if title else "")
+                found.append(JphooCandidate(magnet, record_size, title))
             for item in value.values(): walk(item)
         elif isinstance(value, list):
             for item in value: walk(item)
@@ -77,7 +85,6 @@ def api_candidates(payload) -> list[JphooCandidate]:
     for item in found:
         if item.magnet not in best or (item.size_bytes or 0) > (best[item.magnet].size_bytes or 0): best[item.magnet] = item
     return list(best.values())
-
 
 def series_links_from_html(html: str, base_url: str) -> list[str]:
     soup = BeautifulSoup(html or "", "lxml")
@@ -209,8 +216,8 @@ class JphooSource:
             page.remove_listener("response", receive)
 
 def persist_candidates(database, current_movie_id: int, current_title: str, source_url: str, candidates: list[JphooCandidate]) -> dict[str, int]:
-    from backend.db import extract_btih
-    result = {"matched_current": 0, "attached_other": 0, "unmatched": 0, "new_magnets": 0}
+    from backend.db import extract_btih, is_invalid_metadata
+    result = {"matched_current": 0, "attached_other": 0, "unmatched": 0, "new_magnets": 0, "new_source_links": 0}
     seen: set[str] = set()
     for candidate in candidates:
         try: identity = extract_btih(candidate.magnet)
@@ -221,13 +228,13 @@ def persist_candidates(database, current_movie_id: int, current_title: str, sour
         movie_id, entry_url = current_movie_id, source_url
         if kind == "other":
             raw_title = re.sub(r"\s+", " ", candidate.title or "").strip()[:300]
-            if not raw_title: result["unmatched"] += 1; continue
+            if not raw_title or raw_title.startswith("magnet:") or is_invalid_metadata(raw_title): result["unmatched"] += 1; continue
             entry_url = f"{source_url}#magnet-{identity}"
             movie_id = database.add_or_update_movie(raw_title, source="jphoo", source_url=entry_url, source_movie_id=identity)
             result["attached_other"] += 1
         else:
             result["matched_current"] += 1
-        old = {item["btih"] for item in (database.get_movie(movie_id) or {}).get("magnets", [])}
-        database.add_magnet(movie_id, candidate.magnet, "jphoo", entry_url, candidate.size_bytes)
-        result["new_magnets"] += int(identity not in old)
+        saved = database.add_magnet(movie_id, candidate.magnet, "jphoo", entry_url, candidate.size_bytes)
+        result["new_magnets"] += int(saved.created)
+        result["new_source_links"] += int(saved.source_added)
     return result

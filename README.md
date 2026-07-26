@@ -91,4 +91,4 @@ V1 的现有代码和研究记录仍保留在仓库中，供迁移 JavDB/JPHOO �
 
 ## JPHOO 来源扫描
 
-在图书馆右下角打开“来源”，在 JPHOO 区域配置系列。首次使用时点击“打开登录窗口”，只在 Yav V2 专用 Edge 中手动登录；完成后点击“完成登录”，再执行全量扫描或继续扫描。登录资料保存在 `%LOCALAPPDATA%\Yav\v2\browser-profile\jphoo`，不会提交到仓库。
+在左侧导航打开“来源管理”，在 JPHOO 区域配置系列。首次使用时点击“打开登录窗口”，只在 Yav V2 专用 Edge 中手动登录；完成后点击“完成登录”，再执行全量扫描或继续扫描。登录资料保存在 `%LOCALAPPDATA%\Yav\v2\browser-profile\jphoo`，不会提交到仓库。

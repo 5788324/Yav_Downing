@@ -144,7 +144,16 @@ class Handler(BaseHTTPRequestHandler):
         if not match:
             self.send_error(404)
             return
-        self._json({"deleted": self.database.delete_source_series(int(match.group(1)))})
+        source = urlparse(self.path).path.split("/")[3]
+        series_id = int(match.group(1))
+        manager = self.scans if source == "javdb" else self.jphoo_scans
+        if manager and manager.is_running_series(series_id):
+            self._json({"error": "该系列正在扫描，请先停止扫描。"}, 409)
+            return
+        if not self.database.delete_source_series(series_id, source):
+            self._json({"error": "来源系列不存在或来源不匹配"}, 404)
+            return
+        self._json({"deleted": True})
 
 
     def do_POST(self):
@@ -183,14 +192,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if urlparse(self.path).path == "/api/sources/jphoo":
             try:
-                payload=self._read_json(); payload["source"]="jphoo"; self._json({"id": self.database.save_source_series(**payload)}, 201)
+                payload=self._source_payload(self._read_json(), "jphoo"); self._json({"id": self.database.save_source_series(**payload)}, 201)
             except (ValueError, TypeError) as exc:
                 self._json({"error":str(exc)}, 400)
             return
 
         if urlparse(self.path).path == "/api/sources/javdb":
             try:
-                self._json({"id": self.database.save_source_series(**self._read_json())}, 201)
+                self._json({"id": self.database.save_source_series(**self._source_payload(self._read_json(), "javdb"))}, 201)
             except (ValueError, TypeError) as exc:
                 self._json({"error": str(exc)}, 400)
             return
@@ -201,7 +210,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             payload = self._read_json()
-            favorite = bool(payload.get("favorite"))
+            if type(payload.get("favorite")) is not bool: raise ValueError("favorite 必须是 JSON 布尔值")
+            favorite = payload["favorite"]
             if not self.database.set_favorite(int(match.group(1)), favorite):
                 self._json({"error": "影片不存在"}, 404)
                 return
@@ -209,6 +219,14 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, TypeError) as exc:
             self._json({"error": str(exc)}, 400)
 
+    @staticmethod
+    def _source_payload(payload, source):
+        if not isinstance(payload, dict):
+            raise ValueError("来源配置必须是对象")
+        allowed = {"series_id", "name", "url", "enabled", "profile_dir"}
+        clean = {key: payload[key] for key in allowed if key in payload}
+        clean["source"] = source
+        return clean
     @staticmethod
     def _optional_bool(value):
         if value in (None, ""):

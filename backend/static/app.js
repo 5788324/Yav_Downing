@@ -110,7 +110,7 @@ async function loadFilters() {
   fillSelect('#studioFilter', state.filterData.studios, '全部厂商', '未知厂商');
   fillSelect('#seriesFilter', state.filterData.series, '全部系列', '未分类系列');
   fillSelect('#actressFilter', state.filterData.actresses, '全部女演员', '未知女演员');
-  fillSelect('#sourceFilter', state.filterData.sources, '全部来源');
+  fillSelect('#sourceFilter', state.filterData.sources, '全部磁链来源');
 }
 
 function fillSelect(selector, values, allLabel, unknownLabel = '') {
@@ -267,11 +267,11 @@ function magnetList(magnets) {
 function editForm(movie) {
   return `<form id="editForm" class="edit-form" hidden>
     <label class="wide">影片名<input name="title" value="${escapeHtml(movie.title)}" required></label>
-    <label>封面网址<input name="cover_url" value="${escapeHtml(movie.cover_url || '')}" placeholder="https://..."></label>
+    <label>封面网址<input name="cover_url" type="url" value="${escapeHtml(movie.cover_url || '')}" placeholder="https://..."></label>
     <label>厂商<input name="studio" value="${escapeHtml(movie.studio || '')}"></label>
     <label>系列<input name="series" value="${escapeHtml(movie.series || '')}"></label>
-    <label>日期<input name="release_date" value="${escapeHtml(movie.release_date || '')}" placeholder="YYYY-MM-DD"></label>
-    <label>时长（分钟）<input name="duration_minutes" type="number" min="0" value="${movie.duration_minutes ?? ''}"></label>
+    <label>日期<input name="release_date" type="date" value="${escapeHtml(movie.release_date || '')}"></label>
+    <label>时长（分钟）<input name="duration_minutes" type="number" min="0" max="1440" value="${movie.duration_minutes ?? ''}"></label>
     <label class="wide">女演员<input name="actresses" value="${escapeHtml((movie.actresses || []).join('、'))}" placeholder="多人请用顿号或逗号分隔"></label>
     <div class="save-row"><button type="submit">保存手动修改</button></div>
   </form>`;
@@ -310,7 +310,7 @@ function clearFilters() {
   $('#actressFilter').value = '';
   $('#sourceFilter').value = '';
   $('#magnetFilter').value = '';
-  $$('.nav-item').forEach(item => item.classList.toggle('is-active', item.dataset.quick === 'all'));
+  $$('.nav-item[data-quick]').forEach(item => item.classList.toggle('is-active', item.dataset.quick === 'all'));
   loadMovies({ scroll: true });
 }
 
@@ -356,9 +356,9 @@ function bindEvents() {
   $('#clearFilters').addEventListener('click', clearFilters);
   $('#emptyClear').addEventListener('click', clearFilters);
 
-  $$('.nav-item').forEach(button => button.addEventListener('click', () => {
+  $$('.nav-item[data-quick]').forEach(button => button.addEventListener('click', () => {
     state.quick = button.dataset.quick; state.page = 1;
-    $$('.nav-item').forEach(item => item.classList.toggle('is-active', item === button));
+    $$('.nav-item[data-quick]').forEach(item => item.classList.toggle('is-active', item === button));
     loadMovies({ scroll: true });
   }));
 
@@ -372,7 +372,7 @@ function bindEvents() {
     button.addEventListener('click', () => {
       state.view = button.dataset.view;
       localStorage.setItem('yav-view', state.view);
-      $$('.view-btn').forEach(item => item.classList.toggle('is-active', item === button));
+      $$('.view-btn').forEach(item => { item.classList.toggle('is-active', item === button); item.setAttribute('aria-pressed', String(item === button)); });
       renderMovies();
     });
   });
@@ -434,35 +434,80 @@ async function init() {
 
 init();
 
+let sourcePollTimer = null;
+let sourceOpBusy = false;
+let sourceLastTrigger = null;
+
+function sourcePayload(form, source) {
+  return {
+    series_id: form.dataset.editId ? Number(form.dataset.editId) : undefined,
+    name: form.name.value.trim(), url: form.url.value.trim(), enabled: form.enabled.checked,
+    profile_dir: source === 'jphoo' ? form.profile_dir.value.trim() : '',
+  };
+}
+function sourceButtons(item) {
+  const state = item.scan_status || (item.enabled ? 'idle' : 'disabled');
+  const locked = ['running', 'stopping'].includes(state);
+  const disabled = !item.enabled || locked;
+  if (state === 'running') return `<button data-source="${item.source}" data-stop="${item.id}">停止扫描</button>`;
+  if (state === 'stopping') return '<button disabled>正在停止…</button>';
+  if (!item.enabled) return `<button data-source="${item.source}" data-toggle="${item.id}" data-enabled="true">启用</button><button data-source="${item.source}" data-edit="${item.id}">编辑</button><button data-source="${item.source}" data-delete="${item.id}">删除</button>`;
+  if (state === 'login_required') return '<span class="source-hint">JPHOO 需要重新登录</span>';
+  return `<button data-source="${item.source}" data-scan="${item.id}" ${disabled ? 'disabled' : ''}>全量扫描</button><button data-source="${item.source}" data-continue="${item.id}" ${disabled ? 'disabled' : ''}>继续扫描</button><button data-source="${item.source}" data-edit="${item.id}" ${locked ? 'disabled' : ''}>编辑</button><button data-source="${item.source}" data-toggle="${item.id}" data-enabled="false" ${locked ? 'disabled' : ''}>停用</button><button data-source="${item.source}" data-delete="${item.id}" ${locked ? 'disabled' : ''}>删除</button>`;
+}
+function sourceCard(item) {
+  const stats = `页 ${item.current_page || item.last_completed_page || 0} · 发现 ${item.discovered || 0} · 处理 ${item.processed_count || 0} · 新磁链 ${item.new_magnets || 0} · 失败 ${item.failures || 0}`;
+  return `<article class="source-card" data-source-card="${item.source}-${item.id}"><div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.url)}</p><small>${item.enabled ? '已启用' : '已停用'} · ${stats}${item.last_error ? ` · ${escapeHtml(item.last_error)}` : ''}</small></div><div class="source-actions">${sourceButtons(item)}</div></article>`;
+}
+function sourceForm(source, label) {
+  return `<form class="source-form" data-source-form="${source}"><h3 data-form-title>添加 ${label} 系列</h3><input name="name" placeholder="系列名称" required><input name="url" type="url" placeholder="${label} 系列网址" required>${source === 'jphoo' ? '<input name="profile_dir" placeholder="浏览器资料目录（留空使用默认）">' : ''}<label class="source-check"><input name="enabled" type="checkbox" checked> 启用此系列</label><div><button type="submit">保存系列</button><button type="button" data-cancel-edit hidden>取消编辑</button></div></form>`;
+}
 async function sourcePanel(source, label) {
-  const [rows, status, login] = await Promise.all([request(`/api/sources/${source}`), request(`/api/sources/${source}/scan`), source === 'jphoo' ? request('/api/sources/jphoo/login') : Promise.resolve({})]);
-  const extras = source === 'jphoo'
-    ? `<div class="source-login"><strong>JPHOO 登录</strong>：${escapeHtml(login.login || login.status || '请先检查')}
-       <button data-login="open">打开登录窗口</button><button data-login="check">检查登录状态</button><button data-login="close">完成登录</button></div>` : '';
-  const stats = `状态：${escapeHtml(status.status || 'idle')}；当前页：${status.page || 0}；发现：${status.discovered || 0}；处理：${status.processed || 0}；新增影片：${status.new_movies || 0}；新增磁链：${status.new_magnets || 0}；当前匹配：${status.matched_current || 0}；附带影片：${status.attached_other_movies || 0}；未匹配：${status.unmatched_candidates || 0}；失败：${status.failures || 0}${status.message ? `；错误：${escapeHtml(status.message)}` : ''}`;
-  const rowsHtml = rows.map(item => `<div class="source-row"><strong>${escapeHtml(item.name)}</strong><br><small>${escapeHtml(item.url)} · ${item.enabled ? '已启用' : '已停用'} · 完成页 ${item.last_completed_page || 0} · 最近扫描 ${escapeHtml(item.last_scanned_at || '无')}</small><br><button data-source="${source}" data-scan="${item.id}">全量扫描</button><button data-source="${source}" data-continue="${item.id}">继续扫描</button><button data-source="${source}" data-stop="${item.id}">停止</button><button data-source="${source}" data-edit-source="${item.id}">编辑</button><button data-source="${source}" data-toggle="${item.id}" data-enabled="${item.enabled ? '0' : '1'}">${item.enabled ? '停用' : '启用'}</button><button data-source="${source}" data-delete-source="${item.id}">删除</button></div>`).join('') || `<p>尚未配置 ${label} 系列。</p>`;
-  return `<h2>${label} 来源</h2>${extras}<p>${stats}</p><form class="source-form" data-source-form="${source}"><input name="name" placeholder="系列名称" required><input name="url" placeholder="${label} 系列网址" required>${source === 'jphoo' ? '<input name="profile_dir" placeholder="浏览器资料目录（留空使用默认）">' : ''}<button>添加</button></form>${rowsHtml}`;
+  const [rows, scan, login] = await Promise.all([request(`/api/sources/${source}`), request(`/api/sources/${source}/scan`), source === 'jphoo' ? request('/api/sources/jphoo/login') : Promise.resolve({})]);
+  const loginCard = source === 'jphoo' ? `<section class="source-status-card"><h3>JPHOO 登录状态：<span data-login-state>${escapeHtml(login.login || login.status || 'unknown')}</span></h3><p>仅使用 Yav V2 专用 Edge，不读取或提交 Cookie。</p><button data-login="open">打开登录窗口</button><button data-login="check">检查登录</button><button data-login="close" ${login.window_open ? '' : 'disabled'}>完成登录</button></section>` : '';
+  const scanText = `当前扫描：${escapeHtml(scan.series_name || '无')} · 来源：${escapeHtml(scan.source || source)} · 状态：${escapeHtml(scan.status || 'idle')} · 当前页：${scan.current_page || scan.page || 0} · 发现：${scan.discovered || 0} · 处理：${scan.processed_count || scan.processed || 0} · 新磁链：${scan.new_magnets || 0} · 失败：${scan.failures || 0}`;
+  return `<section class="source-section" data-source-section="${source}">${source === 'javdb' ? '<h2 id="sourcesTitle">来源管理</h2>' : ''}<h3>${label}</h3>${loginCard}<section class="source-status-card" data-scan-status="${source}">${scanText}</section>${sourceForm(source,label)}<div class="source-cards">${rows.map(sourceCard).join('') || `<p class="source-empty">尚未配置 ${label} 系列。</p>`}</div></section>`;
 }
 async function renderSources() {
-  $('#sourceContent').innerHTML = await sourcePanel('javdb', 'JavDB') + await sourcePanel('jphoo', 'JPHOO');
+  if (sourceOpBusy) return;
+  const content = $('#sourceContent');
+  content.innerHTML = '<p class="source-loading">正在读取来源配置…</p>';
+  try { content.innerHTML = await sourcePanel('javdb', 'JavDB') + await sourcePanel('jphoo', 'JPHOO'); }
+  catch (error) { content.innerHTML = `<p class="source-error">${escapeHtml(error.message)}</p>`; showToast(error.message); }
 }
-$('#openSources').addEventListener('click', async () => { $('#sourceOverlay').hidden = false; await renderSources(); });
-$('#closeSources').addEventListener('click', () => $('#sourceOverlay').hidden = true);
-$('#sourceOverlay').addEventListener('click', event => { if (event.target === $('#sourceOverlay')) $('#sourceOverlay').hidden = true; });
-$('#sourceContent').addEventListener('submit', async event => {
-  const form = event.target, source = form.dataset.sourceForm; if (!source) return;
-  event.preventDefault(); await request(`/api/sources/${source}`, {method: 'POST', body: JSON.stringify({name: form.name.value, url: form.url.value, enabled: true, profile_dir: form.profile_dir ? form.profile_dir.value : ''})}); await renderSources();
+function openSources() { sourceLastTrigger = document.activeElement; $('#sourceOverlay').hidden = false; document.body.style.overflow = 'hidden'; renderSources().then(() => $('#closeSources').focus()); if (!sourcePollTimer) sourcePollTimer = setInterval(refreshSourceStatuses, 3000); }
+function closeSources() { $('#sourceOverlay').hidden = true; document.body.style.overflow = ''; clearInterval(sourcePollTimer); sourcePollTimer = null; sourceLastTrigger?.focus(); }
+async function refreshSourceStatuses() {
+  if ($('#sourceOverlay').hidden || sourceOpBusy || document.activeElement?.closest('.source-form')) return;
+  try {
+    for (const source of ['javdb','jphoo']) {
+      const scan = await request(`/api/sources/${source}/scan`);
+      const box = $(`[data-scan-status="${source}"]`);
+      if (box) box.textContent = `当前扫描：${scan.series_name || '无'} · 来源：${scan.source || source} · 状态：${scan.status || 'idle'} · 当前页：${scan.current_page || scan.page || 0} · 发现：${scan.discovered || 0} · 处理：${scan.processed_count || scan.processed || 0} · 新磁链：${scan.new_magnets || 0} · 失败：${scan.failures || 0}`;
+    }
+  } catch (_) { /* 保留当前界面，下一次轮询重试 */ }
+}
+async function sourceAction(button, work) {
+  if (sourceOpBusy) return; sourceOpBusy = true; button.disabled = true;
+  try { await work(); await renderSources(); } catch (error) { showToast(error.message); button.disabled = false; } finally { sourceOpBusy = false; }
+}
+$('#openSources').addEventListener('click', openSources);
+$('#closeSources').addEventListener('click', closeSources);
+$('#sourceOverlay').addEventListener('click', event => { if (event.target === $('#sourceOverlay')) closeSources(); });
+$('#sourceContent').addEventListener('submit', event => {
+  const form = event.target, source = form.dataset.sourceForm; if (!source) return; event.preventDefault();
+  sourceAction(form.querySelector('[type="submit"]'), async () => { await request(`/api/sources/${source}`, {method:'POST', body:JSON.stringify(sourcePayload(form,source))}); showToast('来源配置已保存'); });
 });
-$('#sourceContent').addEventListener('click', async event => {
-  const button = event.target, source = button.dataset.source;
-  if (button.dataset.login) { await request(`/api/sources/jphoo/login/${button.dataset.login}`, {method: 'POST', body: '{}'}); await renderSources(); return; }
+$('#sourceContent').addEventListener('click', event => {
+  const button = event.target.closest('button'); if (!button) return;
+  const source = button.dataset.source;
+  if (button.dataset.login) return sourceAction(button, () => request(`/api/sources/jphoo/login/${button.dataset.login}`, {method:'POST',body:'{}'}));
+  if (button.dataset.cancelEdit) { const form=button.closest('form'); form.reset(); delete form.dataset.editId; button.hidden=true; form.querySelector('[data-form-title]').textContent=`添加 ${form.dataset.sourceForm === 'jphoo' ? 'JPHOO' : 'JavDB'} 系列`; return; }
   if (!source) return;
-  if (button.dataset.scan) await request(`/api/sources/${source}/${button.dataset.scan}/scan`, {method: 'POST', body: '{}'});
-  if (button.dataset.continue) await request(`/api/sources/${source}/${button.dataset.continue}/continue`, {method: 'POST', body: '{}'});
-  if (button.dataset.stop) await request(`/api/sources/${source}/${button.dataset.stop}/stop`, {method: 'POST', body: '{}'});
-  if (button.dataset.editSource) { const item = (await request(`/api/sources/${source}`)).find(row => String(row.id) === button.dataset.editSource); if (item) { const name = window.prompt('系列名称', item.name); const url = window.prompt('系列网址', item.url); if (name && url) await request(`/api/sources/${source}`, {method: 'POST', body: JSON.stringify({...item, name, url, series_id: item.id})}); } }
-  if (button.dataset.toggle) { const item = (await request(`/api/sources/${source}`)).find(row => String(row.id) === button.dataset.toggle); if (item) await request(`/api/sources/${source}`, {method: 'POST', body: JSON.stringify({...item, enabled: button.dataset.enabled === '1', series_id: item.id})}); }
-  if (button.dataset.deleteSource) await request(`/api/sources/${source}/${button.dataset.deleteSource}`, {method: 'DELETE'});
-  await renderSources();
+  if (button.dataset.edit) return request(`/api/sources/${source}`).then(rows => { const item=rows.find(row=>String(row.id)===button.dataset.edit); const form=$(`[data-source-form="${source}"]`); form.dataset.editId=item.id; form.name.value=item.name; form.url.value=item.url; form.enabled.checked=Boolean(item.enabled); if(form.profile_dir) form.profile_dir.value=item.profile_dir||''; form.querySelector('[data-form-title]').textContent=`编辑 ${item.name}`; form.querySelector('[data-cancel-edit]').hidden=false; form.scrollIntoView({behavior:'smooth',block:'center'}); }).catch(error => showToast(error.message));
+  if (button.dataset.delete) return sourceAction(button, async () => { if (!window.confirm('确认删除这个来源系列配置吗？')) return; await request(`/api/sources/${source}/${button.dataset.delete}`,{method:'DELETE'}); showToast('已删除来源系列'); });
+  if (button.dataset.toggle) return sourceAction(button, async () => { const item=(await request(`/api/sources/${source}`)).find(row=>String(row.id)===button.dataset.toggle); await request(`/api/sources/${source}`,{method:'POST',body:JSON.stringify({series_id:item.id,name:item.name,url:item.url,enabled:button.dataset.enabled==='true',profile_dir:item.profile_dir||''})}); });
+  const action = button.dataset.scan ? 'scan' : button.dataset.continue ? 'continue' : button.dataset.stop ? 'stop' : '';
+  const id = button.dataset.scan || button.dataset.continue || button.dataset.stop;
+  if (action) sourceAction(button, () => request(`/api/sources/${source}/${id}/${action}`, {method:'POST',body:'{}'}));
 });
-setInterval(() => { if (!$('#sourceOverlay').hidden) renderSources().catch(() => {}); }, 3000);

@@ -255,4 +255,24 @@ select { appearance: none; }
   .edit-form { grid-template-columns: 1fr; }
   .edit-form label.wide, .edit-form .save-row { grid-column: auto; }
 }
-.source-entry{position:fixed;right:24px;bottom:24px;border:0;border-radius:999px;background:#24221c;color:#fff;padding:12px 18px;cursor:pointer;box-shadow:0 5px 18px #0004}.source-row{padding:14px 0;border-bottom:1px solid #e7dfd1}.source-row button{margin-left:6px}.source-form{display:grid;grid-template-columns:1fr 2fr auto;gap:8px;margin:16px 0}.source-form input{min-width:0;padding:9px}@media(max-width:700px){.source-form{grid-template-columns:1fr}.source-entry{right:14px;bottom:14px}}
+
+.nav-divider { height: 1px; background: rgba(255,255,255,.12); margin: 10px 0; }
+.source-panel { max-width: 980px; }
+.source-section + .source-section { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 24px; }
+.source-status-card, .source-card { border: 1px solid var(--line); border-radius: 14px; padding: 14px; background: #fffdf8; margin-top: 12px; }
+.source-card[aria-busy="true"] { opacity: .68; pointer-events: none; }
+.source-card-head, .source-actions, .source-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.source-card-head { justify-content: space-between; }
+.source-card h3, .source-card p { margin: 0; }
+.source-meta { color: var(--muted); font-size: 13px; margin-top: 8px; }
+.source-actions { margin-top: 12px; }
+.source-actions button, .source-status-card button { min-height: 34px; }
+.source-form { display: grid; grid-template-columns: minmax(140px,1fr) minmax(220px,2fr) auto; gap: 10px; align-items: end; margin-top: 14px; }
+.source-form label { display: grid; gap: 5px; font-size: 13px; color: var(--muted); }
+.source-form input { min-width: 0; min-height: 38px; border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: inherit; }
+.source-form .source-check { display: flex; align-items: center; gap: 6px; color: var(--ink); }
+.source-form .source-form-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.source-error { color: #9f2e2e; margin-top: 8px; }
+.source-loading { color: var(--muted); padding: 20px 0; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid rgba(190,144,55,.55); outline-offset: 2px; }
+@media (max-width: 700px) { .source-form { grid-template-columns: 1fr; } .source-panel { margin: 10px; } }

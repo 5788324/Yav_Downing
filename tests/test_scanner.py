@@ -26,6 +26,18 @@ class ScannerTests(unittest.TestCase):
    db.add_magnet(movie,'magnet:?xt=urn:btih:SIZE','javdb','https://x/v/size',200)
    db.add_magnet(movie,'magnet:?xt=urn:btih:SIZE','javdb','https://x/v/size',100)
    self.assertEqual(db.get_movie(movie)['magnets'][0]['size_bytes'],200)
+
+class DataProtectionTests(unittest.TestCase):
+ def test_manual_actresses_are_not_appended_by_a_later_scan(self):
+  with tempfile.TemporaryDirectory() as d:
+   db=LibraryDatabase(Path(d)/'library.db'); movie=db.add_or_update_movie('ABP-001',actresses=['Source A'],source='javdb',source_url='https://x/v/1')
+   db.update_movie(movie,{'actresses':['Manual A']})
+   db.add_or_update_movie('ABP-001',actresses=['Source A','Source B'],source='jphoo',source_url='https://x/v/1')
+   self.assertEqual(db.get_movie(movie)['actresses'],['Manual A'])
+ def test_disabled_series_cannot_run(self):
+  with tempfile.TemporaryDirectory() as d:
+   db=LibraryDatabase(Path(d)/'library.db'); sid=db.save_source_series('Disabled','https://x/series',False)
+   with self.assertRaisesRegex(ValueError,'已停用'): JavdbScanner(db).run(sid,True)
 if __name__=='__main__': unittest.main()
 
 

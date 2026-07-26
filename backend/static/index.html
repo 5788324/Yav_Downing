@@ -31,6 +31,10 @@
         <button class="nav-item" data-quick="without-magnets">
           <span class="nav-icon">○</span><span>等待补全</span><strong id="navWithoutMagnets">0</strong>
         </button>
+        <div class="nav-divider" aria-hidden="true"></div>
+        <button class="nav-item" id="openSources" type="button">
+          <span class="nav-icon">⌘</span><span>来源管理</span><strong>›</strong>
+        </button>
       </nav>
 
       <section class="sidebar-section">
@@ -55,9 +59,9 @@
         </div>
         <div class="topbar-actions">
           <div class="view-switcher" aria-label="视图风格">
-            <button class="view-btn is-active" data-view="gallery" title="海报墙">海报墙</button>
-            <button class="view-btn" data-view="shelf" title="收藏架">收藏架</button>
-            <button class="view-btn" data-view="catalog" title="资料册">资料册</button>
+            <button class="view-btn is-active" aria-pressed="true" data-view="gallery" title="海报墙">海报墙</button>
+            <button class="view-btn" aria-pressed="false" data-view="shelf" title="收藏架">收藏架</button>
+            <button class="view-btn" aria-pressed="false" data-view="catalog" title="资料册">资料册</button>
           </div>
         </div>
       </header>
@@ -85,7 +89,7 @@
           <label><span>厂商</span><select id="studioFilter"></select></label>
           <label><span>系列</span><select id="seriesFilter"></select></label>
           <label><span>女演员</span><select id="actressFilter"></select></label>
-          <label><span>来源</span><select id="sourceFilter"></select></label>
+          <label><span>磁链来源</span><select id="sourceFilter" aria-label="磁链来源"></select></label>
           <label><span>磁链状态</span>
             <select id="magnetFilter">
               <option value="">全部</option>
@@ -126,7 +130,7 @@
         <div id="pageNumbers" class="page-numbers"></div>
         <button id="nextPage">下一页 →</button>
       </footer>
-    </main><button id="openSources" class="source-entry">来源</button><div id="sourceOverlay" class="overlay" hidden><article class="detail-panel"><button id="closeSources" class="close-button">×</button><div id="sourceContent"></div></article></div>
+    </main><div id="sourceOverlay" class="overlay" hidden><article class="detail-panel source-panel" role="dialog" aria-modal="true" aria-labelledby="sourcesTitle"><button id="closeSources" class="close-button" aria-label="关闭来源管理">×</button><div id="sourceContent"></div></article></div>
   </div>
 
   <div id="detailOverlay" class="overlay" hidden>
