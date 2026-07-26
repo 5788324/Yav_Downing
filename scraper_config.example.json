@@ -1,0 +1,11 @@
+{
+  "sources": [
+    {
+      "site": "jphoo",
+      "name": "示例系列",
+      "url": "https://www.jphoo.net/series/示例ID",
+      "dir": "D:\\YavData\\example_series"
+    }
+  ],
+  "browser_mode": true
+}
