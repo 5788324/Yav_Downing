@@ -98,3 +98,6 @@
 - 只在 %TEMP%\Yav-javdb-real-test 副本扫描 Wifey；V1 数据与配置未修改。
 - 环境超时验证了页码和统计持久化需求，已增加 interrupted 恢复。
 
+
+- Wifey 后台断点继续完成全系列，实际确认 72 条 JavDB 来源页与磁链追加生效。
+
