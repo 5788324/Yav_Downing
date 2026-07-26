@@ -134,7 +134,12 @@ class Handler(BaseHTTPRequestHandler):
     def _optional_bool(value):
         if value in (None, ""):
             return None
-        return str(value).lower() in {"1", "true", "yes", "on"}
+        normalized = str(value).strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        raise ValueError("布尔筛选参数只能是 true 或 false")
 
     def log_message(self, *_args):
         pass
@@ -156,3 +161,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
