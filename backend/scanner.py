@@ -1,7 +1,10 @@
 """本地单线程来源扫描器：JavDB 与 JPHOO 共用简单进度模型。"""
 from __future__ import annotations
 import json
-from threading import Event, Thread
+from pathlib import Path
+from queue import Queue
+from threading import Event, Thread, Lock
+from urllib.parse import urlparse
 from .sources.javdb import JavdbSource
 
 class BaseScanner:
@@ -49,89 +52,250 @@ class JavdbScanner(BaseScanner):
         self._finish(series_id,run_id,page,stats,status,error); return {"status":status,"page":page,"message":error,**stats}
 
 class JphooScanner(BaseScanner):
-    source_name="jphoo"
-    def __init__(self,database,profile_dir): super().__init__(database); self.profile_dir=profile_dir; self.source=None
-    def run(self,series_id,from_start=False):
-        from .sources.jphoo import JphooSource,LoginRequired,persist_candidates
-        series,page,run_id=self._begin(series_id,from_start); stats={k:0 for k in ("discovered","processed","new_movies","new_magnets","failures","matched_current","attached_other_movies","unmatched_candidates")}; error=""; self.source=JphooSource()
+    source_name = "jphoo"
+
+    def __init__(self, database, profile_dir, source=None):
+        super().__init__(database)
+        self.profile_dir = str(profile_dir)
+        self.source = source
+
+    def run(self, series_id, from_start=False):
+        from .sources.jphoo import JphooSource, LoginRequired, persist_candidates
+        series, page, run_id = self._begin(series_id, from_start)
+        stats = {key: 0 for key in ("discovered", "processed", "new_movies", "new_magnets", "failures", "matched_current", "attached_other_movies", "unmatched_candidates")}
+        error = ""
+        owns_browser = self.source is None
+        source = self.source or JphooSource()
         try:
-            self.source.open_browser(series["profile_dir"] or self.profile_dir)
-            for page,urls in self.source.scan_series(series["url"],start_page=page,stop_event=self.stop_event):
+            if owns_browser:
+                source.open_browser(self.profile_dir)
+            for page, urls in source.scan_series(series["url"], start_page=page, stop_event=self.stop_event):
                 for url in urls:
-                    if self.stop_event.is_set(): break
-                    stats["discovered"]+=1
+                    if self.stop_event.is_set():
+                        break
+                    stats["discovered"] += 1
                     try:
-                        data=self.source.fetch_movie(url)
-                        if not data.title: raise ValueError("JPHOO 页面未解析到影片名")
-                        existed=self.db.movie_import_exists(data.title,"jphoo",url)
-                        movie=self.db.add_or_update_movie(data.title,studio=data.studio,series=data.series or series["name"],release_date=data.release_date,duration_minutes=data.duration_minutes,cover_url=data.cover_url,actresses=data.actresses,source="jphoo",source_url=url); stats["new_movies"]+=int(not existed)
-                        outcome=persist_candidates(self.db,movie,data.title,url,self.source.fetch_magnet_candidates())
-                        stats["new_magnets"] += outcome["new_magnets"]; stats["matched_current"]+=outcome["matched_current"]; stats["attached_other_movies"]+=outcome["attached_other"]; stats["unmatched_candidates"]+=outcome["unmatched"]; stats["processed"]+=1
-                    except LoginRequired: raise
-                    except Exception as exc: stats["failures"]+=1; error=str(exc)
-                self._save_progress(series_id,run_id,page,stats,error)
-                if self.stop_event.is_set(): break
-            status="stopped" if self.stop_event.is_set() else "completed"
-        except LoginRequired as exc: status="login_required"; error=str(exc)
-        except Exception as exc: status="failed"; stats["failures"]+=1; error=str(exc)
+                        data = source.fetch_movie(url)
+                        if not data.title:
+                            raise ValueError("JPHOO 页面未解析到影片名")
+                        existed = self.db.movie_import_exists(data.title, "jphoo", url)
+                        movie = self.db.add_or_update_movie(data.title, studio=data.studio, series=data.series or series["name"], release_date=data.release_date, duration_minutes=data.duration_minutes, cover_url=data.cover_url, actresses=data.actresses, source="jphoo", source_url=url)
+                        stats["new_movies"] += int(not existed)
+                        outcome = persist_candidates(self.db, movie, data.title, url, source.fetch_magnet_candidates())
+                        stats["new_magnets"] += outcome["new_magnets"]
+                        stats["matched_current"] += outcome["matched_current"]
+                        stats["attached_other_movies"] += outcome["attached_other"]
+                        stats["unmatched_candidates"] += outcome["unmatched"]
+                        stats["processed"] += 1
+                    except LoginRequired:
+                        raise
+                    except Exception as exc:
+                        stats["failures"] += 1
+                        error = str(exc)
+                self._save_progress(series_id, run_id, page, stats, error)
+                if self.stop_event.is_set():
+                    break
+            status = "stopped" if self.stop_event.is_set() else "completed"
+        except LoginRequired as exc:
+            status, error = "login_required", str(exc)
+        except Exception as exc:
+            status, error = "failed", str(exc)
+            stats["failures"] += 1
         finally:
-            if self.source: self.source.close()
-        self._finish(series_id,run_id,page,stats,status,error); return {"status":status,"page":page,"message":error,**stats}
+            if owns_browser:
+                source.close()
+        self._finish(series_id, run_id, page, stats, status, error)
+        return {"status": status, "page": page, "message": error, **stats}
+
 
 class ScanManager:
-    scanner_class=JavdbScanner
-    source_name="javdb"
-    def __init__(self,database): self.database=database; self.scanner=None; self.thread=None; self.result=None; self.series_id=None
+    scanner_class = JavdbScanner
+    source_name = "javdb"
+    def __init__(self, database):
+        self.database, self.scanner, self.thread, self.result, self.series_id = database, None, None, None, None
     def make_scanner(self): return self.scanner_class(self.database)
-    def start(self,series_id,from_start=False):
+    def start(self, series_id, from_start=False):
         if self.thread and self.thread.is_alive(): raise ValueError("该来源已有扫描正在运行")
-        series=self.database.get_source_series(series_id,self.source_name)
+        series = self.database.get_source_series(series_id, self.source_name)
         if not series: raise ValueError("来源系列不存在")
         if not series["enabled"]: raise ValueError("该系列已停用，不能启动扫描")
-        self.series_id=series_id; self.scanner=self.make_scanner(); self.result={"status":"starting","series_id":series_id,"series_name":series["name"],"source":self.source_name}
-        self.thread=Thread(target=lambda:setattr(self,"result",self.scanner.run(series_id,from_start)),daemon=True); self.thread.start(); return self.status()
+        self.series_id, self.scanner = series_id, self.make_scanner()
+        self.result = {"status":"starting", "series_id":series_id, "series_name":series["name"], "source":self.source_name}
+        self.thread = Thread(target=lambda: setattr(self, "result", self.scanner.run(series_id, from_start)), daemon=True)
+        self.thread.start(); return self.status()
     def stop(self):
         if self.scanner: self.scanner.stop()
-        if self.series_id: self.database.set_scan_stopping(self.series_id,self.source_name)
+        if self.series_id: self.database.set_scan_stopping(self.series_id, self.source_name)
         return self.status()
-    def is_running_series(self,series_id): return bool(self.thread and self.thread.is_alive() and self.series_id==series_id)
+    def is_running_series(self, series_id): return bool(self.thread and self.thread.is_alive() and self.series_id == series_id)
     def status(self):
-        latest=self.database.latest_scan_status(self.source_name)
-        running=bool(self.thread and self.thread.is_alive())
-        if latest and (running or latest["status"] in {"running","stopping"}):
-            latest["running"]=running
-            return latest
-        return {**(self.result or {"status":"idle","source":self.source_name}),"running":running}
+        latest = self.database.latest_scan_status(self.source_name); running = bool(self.thread and self.thread.is_alive())
+        if latest and (running or latest["status"] in {"running", "stopping"}): latest["running"] = running; return latest
+        return {**(self.result or {"status":"idle", "source":self.source_name}), "running":running}
 
-class JphooScanManager(ScanManager):
-    scanner_class=JphooScanner
-    source_name="jphoo"
-    def __init__(self,database,profile_dir): super().__init__(database); self.profile_dir=profile_dir
-    def make_scanner(self): return JphooScanner(self.database,self.profile_dir)
-class JphooLoginManager:
-    """独立登录窗口；状态由 UI 轮询，不暴露 Cookie。"""
-    def __init__(self,profile_dir): self.profile_dir=profile_dir; self.thread=None; self._close=Event(); self._check=Event(); self.result={"status":"idle","profile_dir":str(profile_dir),"login":"unknown"}
-    def open(self):
-        if self.thread and self.thread.is_alive(): return self.status()
-        self._close.clear(); self.result={"status":"opening","profile_dir":str(self.profile_dir),"login":"checking"}
-        def worker():
-            from .sources.jphoo import JphooSource
-            source=JphooSource()
-            try:
-                page=source.open_browser(self.profile_dir); page.goto("https://www.jphoo.net",wait_until="domcontentloaded",timeout=45000); self.result={"status":"window_open","profile_dir":str(self.profile_dir),"login":"unchecked"}
-                while not self._close.wait(.2):
-                    if self._check.is_set():
-                        self._check.clear(); self.result={"status":"window_open","profile_dir":str(self.profile_dir),"login":"login_required" if source.browser.login_required() else "ready"}
-                self.result={"status":"closing","profile_dir":str(self.profile_dir),"login":self.result.get("login","unknown")}
-            except Exception as exc: self.result={"status":"failed","profile_dir":str(self.profile_dir),"login":"unknown","message":str(exc)[:200]}
-            finally:
-                source.close()
-                if self.result.get("status") != "failed": self.result={"status":"closed","profile_dir":str(self.profile_dir),"login":"ready"}
-        self.thread=Thread(target=worker,daemon=True); self.thread.start(); return self.status()
-    def check(self):
-        if not self.thread or not self.thread.is_alive(): return self.status()
-        self._check.set(); return {**self.status(),"login":"checking"}
-    def close(self):
-        if self.thread and self.thread.is_alive(): self._close.set(); return {**self.status(),"status":"closing"}
+
+class JphooSessionManager:
+    """同一专用线程内复用一个 Playwright persistent context。"""
+    source_name = "jphoo"
+
+    def __init__(self, database, profile_dir, browser_factory=None):
+        self.database = database
+        self.profile_dir = str(Path(profile_dir).expanduser().resolve())
+        self.browser_factory = browser_factory
+        self.queue, self.thread, self.browser, self.scanner = Queue(), None, None, None
+        self.lock, self.probe_pending = Lock(), Event()
+        self.series_id = None
+        self.result = {"status": "closed", "login": "unknown", "session_state": "closed", "profile_dir": self.profile_dir, "window_open": False}
+
+    def _set(self, **values):
+        with self.lock:
+            self.result.update(values)
+
+    def _snapshot(self):
+        with self.lock:
+            return dict(self.result)
+
+    def _ensure_worker(self):
+        if not (self.thread and self.thread.is_alive()):
+            self.thread = Thread(target=self._worker, name="yav-jphoo-session", daemon=True)
+            self.thread.start()
+
+    def _post(self, command, **payload):
+        self._ensure_worker()
+        self.queue.put((command, payload))
+
+    def _series(self, series_id):
+        series = self.database.get_source_series(series_id, self.source_name)
+        if not series:
+            raise ValueError("JPHOO 系列不存在")
+        if not series["enabled"]:
+            raise ValueError("该系列已停用，不能启动扫描")
+        return series
+
+    def _open_browser(self):
+        from .sources.jphoo import JphooBrowser
+        if self.browser and self.browser.is_open():
+            return self.browser
+        factory = self.browser_factory or JphooBrowser
+        self.browser = factory(self.profile_dir)
+        self.browser.open()
+        return self.browser
+
+    def _diagnose(self, target_url):
+        diagnostic = self.browser.diagnose(target_url)
+        self._set(**diagnostic, last_verified_at=self.database.now(), window_open=diagnostic.get("session_state") == "open")
+        return diagnostic
+
+    def open(self, series_id=None):
+        if series_id is None:
+            raise ValueError("请选择已配置的 JPHOO 系列作为登录目标")
+        series = self._series(int(series_id))
+        self.series_id = int(series_id)
+        self._set(status="opening", login="checking", target_url=series["url"], target_origin=urlparse(series["url"]).netloc)
+        self._post("open", series_id=self.series_id)
         return self.status()
-    def status(self): return {**self.result,"window_open":bool(self.thread and self.thread.is_alive())}
+
+    def check(self):
+        if not self.series_id:
+            raise ValueError("请先打开一个 JPHOO 系列会话")
+        self._set(status="checking", login="checking")
+        self._post("check", series_id=self.series_id)
+        return self.status()
+
+    def close(self):
+        if not self.browser and not (self.thread and self.thread.is_alive()):
+            return self.status()
+        self._set(status="closing")
+        self._post("close")
+        return self.status()
+
+    def start(self, series_id, from_start=False):
+        if self.scanner:
+            raise ValueError("JPHOO 扫描正在运行")
+        series = self._series(int(series_id))
+        self.series_id = int(series_id)
+        snapshot = self._snapshot()
+        if not snapshot.get("window_open") or snapshot.get("login") != "ready":
+            raise ValueError("请先打开会话并验证 JPHOO 登录状态")
+        self._set(status="starting", series_id=self.series_id, series_name=series["name"], source=self.source_name, scanning=True)
+        self._post("scan", series_id=self.series_id, from_start=from_start)
+        return self.status()
+
+    def stop(self):
+        if self.scanner:
+            self.scanner.stop()
+        if self.series_id:
+            self.database.set_scan_stopping(self.series_id, self.source_name)
+        self._set(status="stopping", scanning=bool(self.scanner))
+        return self.status()
+
+    def is_running_series(self, series_id):
+        return bool(self.scanner and self.series_id == series_id)
+
+    def status(self):
+        # Playwright 对象只能由专用线程访问；轮询只投递一次轻量探测。
+        if self._snapshot().get("window_open") and not self.scanner and not self.probe_pending.is_set():
+            self.probe_pending.set()
+            self._post("probe")
+        data = self._snapshot()
+        latest = self.database.latest_scan_status(self.source_name)
+        if latest and (self.scanner or latest["status"] in {"running", "stopping"}):
+            data.update(latest)
+        data["running"] = bool(self.scanner)
+        data["profile_dir"] = self.profile_dir
+        return data
+
+    def shutdown(self):
+        if self.thread and self.thread.is_alive():
+            self._post("shutdown")
+            self.thread.join(timeout=5)
+
+    def _worker(self):
+        from .sources.jphoo import JphooSource
+        while True:
+            command, payload = self.queue.get()
+            try:
+                if command == "open":
+                    series = self._series(payload["series_id"])
+                    browser = self._open_browser()
+                    browser.page.goto(series["url"], wait_until="domcontentloaded", timeout=45000)
+                    self._diagnose(series["url"])
+                    self._set(status="ready" if self._snapshot().get("login") == "ready" else "window_open", series_id=series["id"], series_name=series["name"], source=self.source_name)
+                elif command == "check":
+                    series = self._series(payload["series_id"])
+                    browser = self._open_browser()
+                    browser.page.goto(series["url"], wait_until="domcontentloaded", timeout=45000)
+                    self._diagnose(series["url"])
+                    self._set(status="ready" if self._snapshot().get("login") == "ready" else "window_open")
+                elif command == "probe":
+                    if not self.browser or not self.browser.is_open():
+                        self.browser = None
+                        self._set(status="closed", login="unknown", session_state="closed", window_open=False, scanning=False)
+                elif command == "scan":
+                    series = self._series(payload["series_id"])
+                    browser = self._open_browser()
+                    browser.page.goto(series["url"], wait_until="domcontentloaded", timeout=45000)
+                    diagnostic = self._diagnose(series["url"])
+                    if diagnostic["login"] != "ready":
+                        self._set(status="login_required" if diagnostic["login"] == "login_required" else "unknown", scanning=False)
+                        continue
+                    self.scanner = JphooScanner(self.database, self.profile_dir, source=JphooSource(browser=browser))
+                    self._set(status="running", scanning=True, series_id=series["id"], series_name=series["name"], source=self.source_name)
+                    result = self.scanner.run(series["id"], payload["from_start"])
+                    self.scanner = None
+                    self._set(**result, scanning=False, status=result["status"], login="login_required" if result["status"] == "login_required" else self._snapshot().get("login", "unknown"))
+                elif command in {"close", "shutdown"}:
+                    if self.browser:
+                        self.browser.close()
+                    self.browser = None
+                    self.scanner = None
+                    self._set(status="closed", login="unknown", session_state="closed", window_open=False, scanning=False)
+                    if command == "shutdown":
+                        return
+            except Exception as exc:
+                self.scanner = None
+                open_now = bool(self.browser and self.browser.is_open())
+                self._set(status="failed" if open_now else "closed", login="unknown", message=str(exc)[:200], scanning=False, window_open=open_now, session_state="open" if open_now else "closed")
+            finally:
+                if command == "probe":
+                    self.probe_pending.clear()

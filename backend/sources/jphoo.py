@@ -7,7 +7,7 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -107,27 +107,74 @@ def parse_movie_html(html: str, url: str) -> SourceMovie:
     return SourceMovie(title=title, source_url=url, cover_url=cover_url, studio=first('a[href*="studio"],a[href*="maker"],a[href*="publisher"]'), series=first('a[href*="series"],a[href*="tag"]'), release_date=date.group(1).replace("/", "-").replace(".", "-") if date else "", duration_minutes=int(duration.group(1)) if duration else None, actresses=list(dict.fromkeys(actresses)))
 
 
+def authentication_state(current_url: str, password_visible: int, domain_cookie_count: int, local_storage_keys: int, session_storage_keys: int) -> tuple[str, list[str]]:
+    """纯函数：unknown 不会被当作 login_required。"""
+    signals: list[str] = []
+    if "/login" in (current_url or "").lower():
+        signals.append("login_url")
+    if password_visible:
+        signals.append("visible_password_form")
+    if signals:
+        return "login_required", signals
+    if domain_cookie_count or local_storage_keys or session_storage_keys:
+        return "ready", ["authentication_storage_present"]
+    return "unknown", ["no_explicit_login_signal"]
+
 class JphooBrowser:
+    """只保存一个 Playwright persistent context；不得跨创建线程调用。"""
     def __init__(self, profile_dir: str | Path):
-        self.profile_dir = str(profile_dir); self.playwright = self.context = self.page = None
+        self.profile_dir = str(Path(profile_dir).expanduser().resolve())
+        self.playwright = self.context = self.page = None
+
     def open(self):
         from playwright.sync_api import sync_playwright
         Path(self.profile_dir).mkdir(parents=True, exist_ok=True)
         self.playwright = sync_playwright().start()
         self.context = self.playwright.chromium.launch_persistent_context(self.profile_dir, channel="msedge", headless=False)
-        # 必须在作品页导航前安装，页面脚本会缓存 clipboard.writeText 引用。
         self.context.add_init_script("""(() => { window.__yavCopiedMagnets=[]; try { const c=navigator.clipboard; if(c&&c.writeText){Object.defineProperty(c, "writeText", {configurable:true, value: async value => {if(typeof value==="string"&&value.startsWith("magnet:")) window.__yavCopiedMagnets.push(value); return undefined;}});} } catch (_) {} })();""")
         self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
         return self.page
+
+    def is_open(self):
+        try:
+            return bool(self.context and self.page and not self.page.is_closed())
+        except Exception:
+            return False
+
     def close(self):
         try:
-            if self.context: self.context.close()
+            if self.context:
+                self.context.close()
         finally:
-            if self.playwright: self.playwright.stop()
+            if self.playwright:
+                self.playwright.stop()
             self.playwright = self.context = self.page = None
-    def login_required(self):
-        return bool(self.page and (self.page.locator('input[type="password"]').count() or "/login" in (self.page.url or "").lower()))
 
+    def diagnose(self, target_url: str) -> dict:
+        """只返回认证存储数量和可见 UI 信号，绝不返回敏感值。"""
+        profile = Path(self.profile_dir)
+        result = {"profile_dir": self.profile_dir, "profile_exists": profile.exists(), "profile_size_bytes": sum(path.stat().st_size for path in profile.rglob("*") if path.is_file()), "target_url": target_url, "target_origin": f"{urlparse(target_url).scheme}://{urlparse(target_url).netloc}", "current_url": "", "password_visible": 0, "password_hidden": 0, "cookie_count": 0, "domain_cookie_count": 0, "local_storage_keys": 0, "session_storage_keys": 0, "signals": [], "login": "unknown"}
+        if not self.is_open():
+            result["signals"].append("browser_closed"); result["session_state"] = "closed"; return result
+        page = self.page
+        try:
+            result["current_url"] = page.url or ""
+            total = page.locator('input[type="password"]').count(); visible = page.locator('input[type="password"]:visible').count()
+            result["password_visible"], result["password_hidden"] = visible, max(0, total - visible)
+            cookies = self.context.cookies(); result["cookie_count"] = len(cookies)
+            host = (urlparse(target_url).hostname or "").lstrip(".")
+            result["domain_cookie_count"] = sum(1 for cookie in cookies if host == cookie.get("domain", "").lstrip(".") or host.endswith("." + cookie.get("domain", "").lstrip(".")))
+            stores = page.evaluate("() => ({local: Object.keys(localStorage).length, session: Object.keys(sessionStorage).length})")
+            result["local_storage_keys"], result["session_storage_keys"] = int(stores.get("local", 0)), int(stores.get("session", 0))
+            result["login"], result["signals"] = authentication_state(result["current_url"], visible, result["domain_cookie_count"], result["local_storage_keys"], result["session_storage_keys"])
+            result["session_state"] = "open"
+        except Exception as exc:
+            result["signals"].append(f"diagnostic_error:{type(exc).__name__}"); result["session_state"] = "unknown"
+        return result
+
+    def login_required(self):
+        diagnostic = self.diagnose(self.page.url if self.page else "https://www.jphoo.net/")
+        return diagnostic["login"] == "login_required"
 
 class JphooSource:
     name = "jphoo"

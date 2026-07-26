@@ -732,18 +732,21 @@ CREATE INDEX IF NOT EXISTS idx_source_series_source ON source_series(source,enab
             row = db.execute("SELECT * FROM source_series WHERE id=? AND source=?", (series_id, source)).fetchone()
             return dict(row) if row else None
 
-    def save_source_series(self, name, url, enabled=True, series_id=None, source="javdb", profile_dir="", **_ignored):
+    def save_source_series(self, name, url, enabled=True, series_id=None, source="javdb", profile_dir=None, **_ignored):
         name, url = str(name or "").strip(), str(url or "").strip()
         if source not in {"javdb", "jphoo"}: raise ValueError("不支持的来源")
         if not name or not url.startswith(("https://", "http://")): raise ValueError("请填写系列名称和有效网址")
         if not isinstance(enabled, bool): raise ValueError("启用状态必须是布尔值")
-        profile_dir = str(profile_dir or "").strip()
+        profile_dir = None if profile_dir is None else str(profile_dir).strip()
         with self.connect() as db:
             if series_id:
                 if not db.execute("SELECT 1 FROM source_series WHERE id=? AND source=?", (series_id, source)).fetchone(): raise ValueError("来源系列不存在")
-                db.execute("UPDATE source_series SET name=?,url=?,enabled=?,profile_dir=? WHERE id=? AND source=?", (name,url,int(enabled),profile_dir,series_id,source))
+                if profile_dir is None:
+                    db.execute("UPDATE source_series SET name=?,url=?,enabled=? WHERE id=? AND source=?", (name,url,int(enabled),series_id,source))
+                else:
+                    db.execute("UPDATE source_series SET name=?,url=?,enabled=?,profile_dir=? WHERE id=? AND source=?", (name,url,int(enabled),profile_dir,series_id,source))
                 return int(series_id)
-            return db.execute("INSERT INTO source_series(source,name,url,enabled,profile_dir) VALUES(?,?,?,?,?)", (source,name,url,int(enabled),profile_dir)).lastrowid
+            return db.execute("INSERT INTO source_series(source,name,url,enabled,profile_dir) VALUES(?,?,?,?,?)", (source,name,url,int(enabled),profile_dir or "")).lastrowid
 
     def delete_source_series(self, series_id, source):
         with self.connect() as db:
