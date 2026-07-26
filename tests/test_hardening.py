@@ -41,6 +41,20 @@ class HardeningDataTests(unittest.TestCase):
         self.assertEqual(classify_magnet_candidate("ABP-123 Clear Name", "ABP-123 Another Name"), "current")
 
 
+class ShutdownFrontendTests(unittest.TestCase):
+    def test_shutdown_ui_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        html = (root / "backend" / "static" / "index.html").read_text(encoding="utf-8")
+        script = (root / "backend" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('id="shutdownApp"', html)
+        self.assertIn('aria-label="安全退出 Yav"', html)
+        self.assertIn("/api/app/shutdown", script)
+        self.assertIn("method: 'POST'", script)
+        self.assertIn("JSON.stringify", script)
+        self.assertIn("confirm(", script)
+        self.assertIn("button.disabled = true", script)
+        self.assertNotIn("shutdownToken=", script)
+
 class ApiTests(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
