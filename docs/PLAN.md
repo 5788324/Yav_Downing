@@ -190,3 +190,10 @@
 - [x] RC3 打包版在独立临时数据目录完成空库 UI 验收。
 - [x] RC3 `--shutdown` 实测释放监听端口、实例锁和临时运行凭据。
 - [x] 删除本轮 RC2/RC3 临时验收目录；未触碰正式数据库、Profile 或 V1 数据。
+## 2026-07-27：RC4 安全退出加固
+
+- [x] HTTP shutdown 处理器先返回 202，再由非 daemon 控制线程依序停止 JavDB、等待、停止/关闭 JPHOO，最后关闭 HTTP server。
+- [x] 普通 ScanManager 与 JPHOO 会话都有带超时的 shutdown 等待接口；超时只写脱敏日志。
+- [x] runtime 使用原子实例/密钥文件、Windows PID 退出状态检测和独占哨兵，避免 PID 复用或并发启动误判。
+- [x] 源码及打包版完成隔离退出、备份、恢复和 V1 迁移验收；临时目录已删除。
+- [ ] 重新取得临时已登录 JPHOO profile 后，完成 RC4 打包版真实扫描退出复验。

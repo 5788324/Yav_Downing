@@ -170,3 +170,9 @@
 - 修复空资料库页面的错误 DOM 选择器后，RC3 打包版在新的临时数据目录正常显示“资料库为空”和 V1 导入引导，不再出现前端异常。
 - 页面已确认显示“安全退出 Yav”入口；自动化浏览器的鼠标注入通道超时，未将其误记为产品失败。使用同一 RC3 实例的正式 `--shutdown` 命令验证成功：端口、`yav.lock` 和 `yav.shutdown.json` 均已释放。
 - 全套自动验证为 39 项通过；RC2/RC3 验收临时目录已删除，正式 V1/V2 数据库、封面、浏览器 profile 和日志均未修改。
+## RC4 安全退出复核（2026-07-27）
+
+- 实现：`/api/app/shutdown` 仅接受 JSON，严格校验本机 Host、浏览器 Origin、token 与 instance ID；成功请求先得到 202，实际关闭在独立非 daemon 控制线程执行。`/api/app/status` 返回 app、版本、PID、instance ID、关闭状态及两类扫描状态，不返回 token。
+- 运行文件：临时 `runtime\instance.json` 保存 PID/端口/实例 ID/版本，`runtime\shutdown.secret` 单独保存凭据；均原子写入。Windows PID 查询同时检查退出码，避免已退出进程句柄或 PID 复用误判。
+- 验证：46 项自动测试通过；源码及 RC4 EXE 在独立临时目录完成状态、第二实例、页面协议退出、CLI 退出、端口/进程/runtime 清理、备份/恢复和合成 V1 迁移验证。所有临时目录已删除。
+- 发布状态：RC4 不宣称正式通过。新的 JPHOO 真实已登录打包扫描复验仍被空临时 profile 阻塞；Windows Sandbox/全新用户验收仍待完成。

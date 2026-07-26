@@ -25,3 +25,14 @@
 - [x] 同一 RC3 实例的 `--shutdown` 实测释放端口、实例锁和临时运行凭据。
 - [x] `python -m compileall backend tests yav_v2.py`、39 项单元测试、`node --check backend/static/app.js` 与 `git diff --check` 通过。
 - [x] 临时验收数据库和运行目录已删除；没有修改正式 V1/V2 数据、浏览器 profile 或 V1 磁链。
+## RC4 本机隔离验收（2026-07-27）
+
+- [x] RC4 使用独立 `runtime\instance.json` 与 `runtime\shutdown.secret`，均使用临时文件原子替换；实例文件不含 token。
+- [x] 源码模式：状态身份正确、第二实例拒绝、CLI `--shutdown` 返回 `stopped`，监听端口、进程和 runtime 目录均释放。
+- [x] 打包 RC4：仓库外副本启动，首页、`/api/filters`、`/api/app/status` 均可用；页面实际 bootstrap/Origin/POST 协议获得 202 后服务断开并清理 runtime；打包 CLI 再次验证退出。
+- [x] 打包备份、dry-run 恢复、正式恢复与合成 V1 迁移均在临时数据目录通过；备份 manifest 不含 runtime，V1 哈希未变且二次迁移幂等。
+- [x] 自动验证 46 项通过。
+- [ ] RC4 已登录 JPHOO 打包版真实扫描复验：旧临时 profile 目录已空，不能伪造通过；需要新的独立临时已登录 profile 后完成 ready→扫描→停止/继续→页面退出→重启→扫描中退出链路。
+- [ ] Windows Sandbox/全新用户环境验收仍未完成。
+
+发布产物：`release\Yav-V2-2.0.0-rc4\Yav-V2.exe`，SHA-256 为 `A428C87755B12E77B6D980FCF28AFC930FF4F6ED01602B2AC641542313C5BA72`；发布产物不提交 Git。

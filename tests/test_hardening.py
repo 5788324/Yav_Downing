@@ -53,6 +53,9 @@ class ShutdownFrontendTests(unittest.TestCase):
         self.assertIn("JSON.stringify", script)
         self.assertIn("confirm(", script)
         self.assertIn("button.disabled = true", script)
+        self.assertIn("waitForYavShutdown", script)
+        self.assertIn("/api/app/status", script)
+        self.assertIn("return true; // 本地服务已断开", script)
         self.assertNotIn("shutdownToken=", script)
 
 class ApiTests(unittest.TestCase):

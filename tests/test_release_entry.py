@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import yav_v2
-from backend.runtime import InstanceLock, safe_text
+from backend.runtime import InstanceLock, safe_text, write_runtime_state
 
 
 class ReleaseEntryTests(unittest.TestCase):
@@ -30,11 +30,23 @@ class ReleaseEntryTests(unittest.TestCase):
     def test_stale_instance_lock_is_replaced(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            stale = root / 'yav.lock'
-            stale.write_text('{"pid": 99999999, "port": 8765}', encoding='utf-8')
+            write_runtime_state(root, pid=99999999, port=8765, instance_id="stale", token="old")
+            stale = root / 'runtime' / 'instance.lock'
+            stale.write_text('99999999', encoding='utf-8')
             lock = InstanceLock(root, 8766)
             self.assertTrue(lock.acquire())
+            self.assertEqual(lock.path.parent.name, 'runtime')
             lock.release()
+
+    def test_pid_reuse_without_matching_yav_is_not_treated_as_active(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            write_runtime_state(root, pid=1234, port=8765, instance_id="old", token="old")
+            (root / 'runtime' / 'instance.lock').write_text('1234', encoding='utf-8')
+            with patch('backend.runtime.pid_is_alive', return_value=True), patch('backend.runtime._is_expected_yav', return_value=False):
+                lock = InstanceLock(root, 8766)
+                self.assertTrue(lock.acquire())
+                lock.release()
 
 
 if __name__ == '__main__':

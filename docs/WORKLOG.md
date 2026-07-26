@@ -178,3 +178,12 @@
 - 同一实例通过打包版 `--shutdown` 退出后，监听端口 18772、`yav.lock` 与 `yav.shutdown.json` 均不存在；目标进程为 0。
 - 浏览器自动点击“安全退出 Yav”时底层鼠标注入超时，因此只记录为测试工具限制；实际页面入口已确认渲染，正式退出链路由 CLI 完成同实例验证。
 - 重新运行编译、39 项单元测试、前端语法与 diff 检查均通过；已删除 RC2/RC3 临时验收目录，未提交发布 exe、数据库、截图、日志或 profile。
+## 2026-07-27：RC4 关闭控制与隔离验收
+
+- 将运行凭据从单一 `yav.shutdown.json` 改为 `runtime\instance.json` 与 `runtime\shutdown.secret`，以临时文件原子替换；实例文件不含 token，正常退出删除两者及空 runtime 目录。
+- 修正 Windows `os.kill(pid, 0)` 不可靠的问题，改为 `OpenProcess` + `GetExitCodeProcess`；新增独占 `instance.lock` 防止并发启动竞争，并仅把同一端口、同一 instance ID 的 Yav 视为活跃实例。
+- shutdown handler 先发送 202，随后启动独立非 daemon 控制线程；顺序为 JavDB 停止/等待、JPHOO 停止/等待/关闭、HTTP shutdown、server_close、运行文件和实例锁释放。前端改为 202 后显示退出界面、轮询状态并把本地连接断开视为成功。
+- 自动测试增至 46 项，覆盖真实 ThreadingHTTPServer 生命周期、403/415/Origin 校验、重复关闭、旧 token、端口释放、凭据分离、误目标 CLI、陈旧锁/PID 复用及普通扫描 shutdown。
+- 生成 `release\Yav-V2-2.0.0-rc4\Yav-V2.exe`（54,962,088 bytes，SHA-256 `A428C87755B12E77B6D980FCF28AFC930FF4F6ED01602B2AC641542313C5BA72`）。源码和 EXE 均在 C:\tmp 隔离目录验收后删除临时文件。
+- RC4 打包版备份/恢复/合成 V1 迁移验证通过；旧 V1 哈希不变、二次迁移幂等、备份 manifest 未包含 runtime。
+- JPHOO RC4 已登录真实扫描未伪造为通过：历史临时 profile 目录均为空，需新的独立临时 profile 才能完成最终发布阻塞验收。

@@ -52,3 +52,6 @@ exports/
 
 # 本地发布包与验收产物
 release/
+
+# 本地运行锁与关闭凭据
+runtime/

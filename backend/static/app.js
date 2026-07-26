@@ -518,14 +518,35 @@ if (button.dataset.login) { const series=$('#jphooLoginSeries'); const payload=b
   if (action) sourceAction(button, () => request(`/api/sources/${source}/${id}/${action}`, {method:'POST',body:'{}'}));
 });
 
+async function waitForYavShutdown() {
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch('/api/app/status', {cache: 'no-store'});
+      if (!response.ok) return true;
+      const status = await response.json();
+      if (status.status !== 'shutting_down') return true;
+    } catch (_) {
+      return true; // 本地服务已断开，视为正常退出而非错误。
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  return false;
+}
+
 $('#shutdownApp')?.addEventListener('click', async () => {
   if (!confirm('退出会停止正在进行的扫描并关闭 Yav。是否继续？')) return;
-  const button = $('#shutdownApp'); button.disabled = true; button.textContent = '正在安全退出…';
+  const button = $('#shutdownApp');
+  if (button.disabled) return;
+  button.disabled = true; button.textContent = '正在安全退出…';
   try {
     const boot = window.__YAV_BOOTSTRAP__ || {};
     const response = await fetch('/api/app/shutdown', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({token: boot.shutdownToken, instance_id: boot.instanceId})});
     if (response.status !== 202) throw new Error('关闭请求被拒绝');
-    document.body.innerHTML = '<main class="empty-state"><h3>Yav 正在安全退出…</h3></main>';
-    setTimeout(() => { document.body.innerHTML = '<main class="empty-state"><h3>Yav 已安全退出，可以关闭此页面。</h3></main>'; }, 900);
+    document.body.innerHTML = '<main class="empty-state"><h3>Yav 正在安全退出…</h3><p>正在停止扫描并释放本地资源。</p></main>';
+    const stopped = await waitForYavShutdown();
+    document.body.innerHTML = stopped
+      ? '<main class="empty-state"><h3>Yav 已安全退出，可以关闭此页面。</h3></main>'
+      : '<main class="empty-state"><h3>Yav 仍在安全退出中，请稍后关闭此页面。</h3></main>';
   } catch (error) { button.disabled = false; button.textContent = '安全退出 Yav'; showToast(error.message); }
 });

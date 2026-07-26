@@ -5,15 +5,18 @@ import argparse
 import json
 import sys
 import webbrowser
-from urllib.request import Request, urlopen
 from pathlib import Path
+from urllib.request import Request, urlopen
 
 from backend.app import main as serve_app
 from backend.backup import backup_data_dir
-from backend.db import LibraryDatabase
 from backend.migrate_v1 import migrate, v2_counts
 from backend.restore import RestoreError, restore_data_dir
-from backend.runtime import APP_VERSION, InstanceLock, choose_port, configure_logging, default_data_dir, open_existing_page, safe_text
+from backend.runtime import (
+    APP_VERSION, InstanceLock, choose_port, clear_runtime_state, configure_logging,
+    default_data_dir, open_existing_page, pid_is_alive, port_is_open, read_runtime_state,
+    safe_text, wait_for_exit,
+)
 
 
 def parse_args(argv=None):
@@ -37,26 +40,51 @@ def _message(text: str, title: str = "Yav V2") -> None:
         print(text, file=sys.stderr)
 
 
+def _not_running(data_dir: Path) -> int:
+    # 凭据缺失时不删除仍可能属于活跃实例的文件；下次启动会安全清理已验证陈旧状态。
+    print(json.dumps({"status": "not_running"}, ensure_ascii=False))
+    return 0
+
+
 def _run_command(args, logger) -> int:
     data_dir = args.data_dir.expanduser().resolve()
     if args.shutdown:
-        credential = data_dir / "yav.shutdown.json"
-        if not credential.is_file():
-            print(json.dumps({"status": "not_running"}, ensure_ascii=False)); return 0
+        info, token = read_runtime_state(data_dir)
+        if not info or not token:
+            return _not_running(data_dir)
         try:
-            info = json.loads(credential.read_text(encoding="utf-8"))
-            port, instance_id = int(info["port"]), str(info["instance_id"])
+            pid, port = int(info["pid"]), int(info["port"])
+            instance_id = str(info["instance_id"])
+            if not pid_is_alive(pid):
+                raise RuntimeError("运行实例不存在")
             with urlopen(f"http://127.0.0.1:{port}/api/app/status", timeout=2) as response:
-                status = json.loads(response.read())
-            if status.get("app") != "Yav" or status.get("instance_id") != instance_id:
+                status = json.loads(response.read().decode("utf-8"))
+            if (status.get("app") != "Yav" or status.get("instance_id") != instance_id
+                    or int(status.get("pid", -1)) != pid):
                 raise RuntimeError("目标不是当前 Yav 实例")
-            body = json.dumps({"token": info["token"], "instance_id": instance_id}).encode("utf-8")
-            request = Request(f"http://127.0.0.1:{port}/api/app/shutdown", data=body, headers={"Content-Type": "application/json"}, method="POST")
-            with urlopen(request, timeout=3) as response: response.read()
-            print(json.dumps({"status": "shutting_down", "port": port}, ensure_ascii=False)); return 0
-        except Exception:
-            credential.unlink(missing_ok=True)
-            print(json.dumps({"status": "not_running"}, ensure_ascii=False)); return 0
+            body = json.dumps({"token": token, "instance_id": instance_id}).encode("utf-8")
+            request = Request(f"http://127.0.0.1:{port}/api/app/shutdown", data=body,
+                              headers={"Content-Type": "application/json"}, method="POST")
+            with urlopen(request, timeout=3) as response:
+                if response.status != 202:
+                    raise RuntimeError("关闭请求未接受")
+            if wait_for_exit(pid, port, timeout=20):
+                clear_runtime_state(data_dir)
+                print(json.dumps({"status": "stopped", "port": port}, ensure_ascii=False))
+                return 0
+            print(json.dumps({"status": "shutting_down", "port": port}, ensure_ascii=False))
+            return 1
+        except Exception as exc:
+            # 仅清理由当前 data-dir 持有且已经失效的运行凭据；不会请求其他本地服务。
+            try:
+                stale = not pid_is_alive(int(info.get("pid", 0))) or not port_is_open(int(info.get("port", 0)))
+            except (TypeError, ValueError):
+                stale = True
+            if stale:
+                clear_runtime_state(data_dir)
+            logger.info("安全退出未执行：%s", safe_text(exc))
+            print(json.dumps({"status": "not_running"}, ensure_ascii=False))
+            return 0
     if args.backup:
         report = backup_data_dir(data_dir)
         logger.info("备份完成 path=%s covers=%s", report["backup_dir"], report["copied_covers"])
@@ -105,7 +133,7 @@ def run(argv=None) -> int:
             _message("Yav 已在运行，已保留现有资料库。", "Yav 已在运行")
             return 0
         try:
-            sys.argv = [sys.argv[0], "--data-dir", str(data_dir), "--port", str(port)]
+            sys.argv = [sys.argv[0], "--data-dir", str(data_dir), "--port", str(port), "--instance-id", lock.instance_id]
             if not args.no_browser:
                 sys.argv.append("--open-browser")
             serve_app()

@@ -16,38 +16,73 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .db import LibraryDatabase
 from .scanner import ScanManager, JphooSessionManager
+from .runtime import APP_VERSION, clear_runtime_state, configure_logging, write_runtime_state
 
 
 class ApplicationRuntime:
-    def __init__(self, server, scans, jphoo_session, shutdown_token):
+    """协调关闭顺序；HTTP 请求线程只负责确认请求并返回 202。"""
+
+    def __init__(self, server, scans, jphoo_session, shutdown_token, instance_id=None, logger=None):
         self.server, self.scans, self.jphoo_session = server, scans, jphoo_session
         self.shutdown_token = shutdown_token
-        self.instance_id = secrets.token_urlsafe(12)
+        self.instance_id = instance_id or secrets.token_urlsafe(12)
+        self.logger = logger
         self.shutdown_pending = False
+        self._controller_started = False
         self._lock = threading.Lock()
 
+    @staticmethod
+    def _running(component):
+        try:
+            return bool(component and component.status().get("running"))
+        except Exception:
+            return False
+
     def status(self):
-        javdb = bool(self.scans and self.scans.status().get("running"))
-        jphoo = bool(self.jphoo_session and self.jphoo_session.status().get("running"))
-        return {"app":"Yav", "version":"2.0.0-rc3", "instance_id":self.instance_id,
-                "status":"shutting_down" if self.shutdown_pending else "running",
-                "shutdown_pending":self.shutdown_pending, "javdb_running":javdb, "jphoo_running":jphoo}
+        return {"app": "Yav", "version": APP_VERSION, "instance_id": self.instance_id,
+                "pid": os.getpid(), "status": "shutting_down" if self.shutdown_pending else "running",
+                "shutdown_pending": self.shutdown_pending, "javdb_running": self._running(self.scans),
+                "jphoo_running": self._running(self.jphoo_session)}
 
     def request_shutdown(self, reason="api"):
         with self._lock:
             if self.shutdown_pending:
                 return False
             self.shutdown_pending = True
+            return True
+
+    def start_shutdown(self, reason="api"):
+        with self._lock:
+            if self._controller_started:
+                return False
+            self._controller_started = True
         threading.Thread(target=self.graceful_shutdown, args=(reason,), daemon=False, name="yav-shutdown").start()
         return True
 
+    def _shutdown_component(self, component, name, timeout):
+        if not component:
+            return True
+        try:
+            completed = component.shutdown(timeout=timeout)
+        except TypeError:
+            component.stop()
+            completed = True
+        except Exception as exc:
+            completed = False
+            if self.logger:
+                self.logger.warning("关闭 %s 时发生 %s", name, type(exc).__name__)
+        if completed is False and self.logger:
+            self.logger.warning("等待 %s 退出超时 timeout=%ss", name, timeout)
+        return completed is not False
+
     def graceful_shutdown(self, reason):
         try:
-            if self.scans: self.scans.stop()
-            if self.jphoo_session: self.jphoo_session.stop()
-            if self.jphoo_session: self.jphoo_session.shutdown()
+            self._shutdown_component(self.scans, "JavDB 扫描", 10)
+            self._shutdown_component(self.jphoo_session, "JPHOO 会话", 15)
         finally:
             self.server.shutdown()
+
+
 STATIC_DIR = Path(__file__).with_name("static")
 
 
@@ -203,16 +238,26 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         assert self.database is not None
         if urlparse(self.path).path == "/api/app/shutdown":
-            try: payload = self._read_json()
-            except ValueError: self._json({"error":"请求内容不是有效 JSON"}, 400); return
+            if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+                self._json({"error": "请求必须使用 JSON"}, 415); return
+            try:
+                payload = self._read_json()
+            except ValueError:
+                self._json({"error": "请求内容不是有效 JSON"}, 400); return
             token = payload.get("token") if isinstance(payload, dict) else None
             instance_id = payload.get("instance_id") if isinstance(payload, dict) else None
             origin, host = self.headers.get("Origin", ""), self.headers.get("Host", "")
-            local = host.startswith("127.0.0.1:") and (not origin or origin.startswith("http://127.0.0.1:"))
-            if not (self.runtime and isinstance(token, str) and isinstance(instance_id, str) and local and secrets.compare_digest(token, self.runtime.shutdown_token) and secrets.compare_digest(instance_id, self.runtime.instance_id)):
-                self._json({"error":"无权关闭 Yav"}, 403); return
+            expected_host = f"127.0.0.1:{self.server.server_port}"
+            local = host == expected_host and (not origin or origin == f"http://{expected_host}")
+            if not (self.runtime and isinstance(token, str) and isinstance(instance_id, str) and local
+                    and secrets.compare_digest(token, self.runtime.shutdown_token)
+                    and secrets.compare_digest(instance_id, self.runtime.instance_id)):
+                self._json({"error": "无权关闭 Yav"}, 403); return
             already = not self.runtime.request_shutdown()
-            self._json({"status":"shutting_down", "already_pending":already}, 202); return
+            self._json({"status": "shutting_down", "already_pending": already}, 202)
+            if not already:
+                self.runtime.start_shutdown("api")
+            return
         action_match = re.fullmatch(r"/api/sources/javdb/(\d+)/(scan|continue|stop)", urlparse(self.path).path)
         if action_match:
             try:
@@ -306,15 +351,17 @@ def main():
     )
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--open-browser", action="store_true", help="服务启动后打开本地界面")
+    parser.add_argument("--instance-id", default="")
     args = parser.parse_args()
+    args.data_dir = args.data_dir.expanduser().resolve()
+    logger = configure_logging(args.data_dir)
     Handler.database = LibraryDatabase(args.data_dir / "library.db")
     Handler.scans = ScanManager(Handler.database)
     jphoo_session = JphooSessionManager(Handler.database, args.data_dir / "browser-profile" / "jphoo")
     Handler.jphoo_scans = Handler.jphoo_login = jphoo_session
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    Handler.runtime = ApplicationRuntime(server, Handler.scans, jphoo_session, secrets.token_urlsafe(32))
-    credential_path = args.data_dir / "yav.shutdown.json"
-    credential_path.write_text(json.dumps({"pid": os.getpid(), "port": args.port, "instance_id": Handler.runtime.instance_id, "token": Handler.runtime.shutdown_token}), encoding="utf-8")
+    Handler.runtime = ApplicationRuntime(server, Handler.scans, jphoo_session, secrets.token_urlsafe(32), args.instance_id or None, logger)
+    write_runtime_state(args.data_dir, pid=os.getpid(), port=args.port, instance_id=Handler.runtime.instance_id, token=Handler.runtime.shutdown_token)
     url = f"http://127.0.0.1:{args.port}"
     print(f"Yav V2 已启动：{url}")
     if args.open_browser:
@@ -322,9 +369,9 @@ def main():
     try:
         server.serve_forever()
     finally:
-        jphoo_session.shutdown()
+        jphoo_session.shutdown(timeout=15)
         server.server_close()
-        credential_path.unlink(missing_ok=True)
+        clear_runtime_state(args.data_dir)
 
 if __name__ == "__main__":
     main()

@@ -127,6 +127,13 @@ class ScanManager:
         if self.scanner: self.scanner.stop()
         if self.series_id: self.database.set_scan_stopping(self.series_id, self.source_name)
         return self.status()
+    def shutdown(self, timeout=10):
+        """请求停止并在有限时间内等待普通扫描线程结束。"""
+        self.stop()
+        thread = self.thread
+        if thread and thread.is_alive():
+            thread.join(max(0.0, float(timeout)))
+        return not bool(thread and thread.is_alive())
     def is_running_series(self, series_id): return bool(self.thread and self.thread.is_alive() and self.series_id == series_id)
     def status(self):
         latest = self.database.latest_scan_status(self.source_name); running = bool(self.thread and self.thread.is_alive())
@@ -252,16 +259,17 @@ class JphooSessionManager:
         data["profile_dir"] = self.profile_dir
         return data
 
-    def shutdown(self):
+    def shutdown(self, timeout=15):
         """退出前先请求扫描安全停止，再由浏览器所属线程释放 Profile。"""
         self.shutdown_requested.set()
         if self.scanner or self._snapshot().get("scanning"):
             self._set(status="stopping", close_after_scan=True)
             self.stop()
-        if self.thread and self.thread.is_alive():
+        thread = self.thread
+        if thread and thread.is_alive():
             self._post("shutdown")
-            self.thread.join()
-
+            thread.join(max(0.0, float(timeout)))
+        return not bool(thread and thread.is_alive())
     def _close_browser(self):
         """只能由会话专用线程调用。"""
         if self.browser:

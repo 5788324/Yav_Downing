@@ -56,7 +56,7 @@ class ScanManagerTests(unittest.TestCase):
   from backend.scanner import ScanManager
   with tempfile.TemporaryDirectory() as d:
    manager=ScanManager(LibraryDatabase(Path(d)/'library.db'))
-   self.assertFalse(manager.status()['running']); self.assertEqual(manager.stop()['status'],'idle')
+   self.assertFalse(manager.status()['running']); self.assertEqual(manager.stop()['status'],'idle'); self.assertTrue(manager.shutdown(timeout=0.01))
 
 class RecoveryTests(unittest.TestCase):
  def test_stale_running_scan_is_interrupted_on_open(self):
