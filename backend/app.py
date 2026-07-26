@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .db import LibraryDatabase
-from .scanner import ScanManager
+from .scanner import ScanManager, JphooScanManager
 
 STATIC_DIR = Path(__file__).with_name("static")
 
@@ -18,6 +18,7 @@ STATIC_DIR = Path(__file__).with_name("static")
 class Handler(BaseHTTPRequestHandler):
     database: LibraryDatabase | None = None
     scans: ScanManager | None = None
+    jphoo_scans: JphooScanManager | None = None
 
     def _json(self, data, status=200):
         payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -84,6 +85,14 @@ class Handler(BaseHTTPRequestHandler):
             self._json(self.database.list_source_series())
             return
 
+        if path == "/api/sources/jphoo/scan":
+            self._json(self.jphoo_scans.status() if self.jphoo_scans else {"status":"idle","running":False})
+            return
+
+        if path == "/api/sources/jphoo":
+            self._json(self.database.list_source_series("jphoo"))
+            return
+
         if path == "/api/filters":
             self._json(self.database.get_filters())
             return
@@ -126,7 +135,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         assert self.database is not None
-        match = re.fullmatch(r"/api/sources/javdb/(\d+)", urlparse(self.path).path)
+        match = re.fullmatch(r"/api/sources/(?:javdb|jphoo)/(\d+)", urlparse(self.path).path)
         if not match:
             self.send_error(404)
             return
@@ -144,6 +153,23 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(result, 202)
             except (ValueError, TypeError) as exc:
                 self._json({"error":str(exc)},400)
+            return
+
+        jphoo_action = re.fullmatch(r"/api/sources/jphoo/(\d+)/(scan|continue|stop)", urlparse(self.path).path)
+        if jphoo_action:
+            try:
+                if not self.jphoo_scans: raise ValueError("JPHOO 扫描器未初始化")
+                action,series_id=jphoo_action.group(2),int(jphoo_action.group(1))
+                self._json(self.jphoo_scans.stop() if action == "stop" else self.jphoo_scans.start(series_id, action == "scan"), 202)
+            except (ValueError, TypeError) as exc:
+                self._json({"error":str(exc)},400)
+            return
+
+        if urlparse(self.path).path == "/api/sources/jphoo":
+            try:
+                payload=self._read_json(); payload["source"]="jphoo"; self._json({"id": self.database.save_source_series(**payload)}, 201)
+            except (ValueError, TypeError) as exc:
+                self._json({"error":str(exc)}, 400)
             return
 
         if urlparse(self.path).path == "/api/sources/javdb":
@@ -193,6 +219,7 @@ def main():
     args = parser.parse_args()
     Handler.database = LibraryDatabase(args.data_dir / "library.db")
     Handler.scans = ScanManager(Handler.database)
+    Handler.jphoo_scans = JphooScanManager(Handler.database, args.data_dir / "browser-profile" / "jphoo")
     print(f"Yav V2 已启动：http://127.0.0.1:{args.port}")
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
 
