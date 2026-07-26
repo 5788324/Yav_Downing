@@ -93,6 +93,17 @@ python -m backend.backup `
 ```
 
 每个备份目录包含 `library.db`、存在的本地封面副本，以及 `manifest.json`。远程封面网址保留在数据库中，不会重复下载。
+
+## Windows 打包
+
+在已安装 Python 和项目依赖的开发电脑上执行：
+
+```powershell
+python -m pip install pyinstaller
+python -m PyInstaller --noconfirm --clean yav_v2.spec
+```
+
+生成文件为 `dist\Yav-V2.exe`。双击会启动本地服务并打开默认浏览器；业务数据仍保存于 `%LOCALAPPDATA%\Yav\v2`，不会写入 exe 所在目录。验收或排障可使用 `Yav-V2.exe --no-browser --port 8876`。
 ## 分支说明
 
 - `v1-frozen`：旧版冻结基线，不再增加功能。

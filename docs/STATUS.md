@@ -143,3 +143,9 @@
 - 新增 `python -m backend.backup`：用 SQLite backup API 在原库仍可使用时创建一致快照。
 - 同一时间戳目录保存 `library.db`、存在的本地封面副本和 `manifest.json`；缺失封面只记录影片 ID，远程封面不下载。
 - 原数据库、原封面和 V1 数据均只读；备份目录不可覆盖。
+
+## 2026-07-26：Windows 打包
+
+- 新增 `yav_v2.py` 启动器和 `yav_v2.spec`；PyInstaller 会收集静态界面与 Playwright 运行组件。
+- 生成 `dist\Yav-V2.exe` 后双击自动打开本地浏览器，业务数据仍固定在 `%LOCALAPPDATA%\Yav\v2`。
+- 临时数据目录烟雾验证通过：exe 启动后首页 HTTP 200，自动创建临时 `library.db`；build/dist、临时数据和 exe 均不提交。

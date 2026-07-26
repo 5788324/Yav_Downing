@@ -5,6 +5,8 @@ import json
 import mimetypes
 import os
 import re
+import webbrowser
+from threading import Timer
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -250,13 +252,17 @@ def main():
         default=Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Yav" / "v2",
     )
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--open-browser", action="store_true", help="服务启动后打开本地界面")
     args = parser.parse_args()
     Handler.database = LibraryDatabase(args.data_dir / "library.db")
     Handler.scans = ScanManager(Handler.database)
     jphoo_session = JphooSessionManager(Handler.database, args.data_dir / "browser-profile" / "jphoo")
     Handler.jphoo_scans = Handler.jphoo_login = jphoo_session
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    print(f"Yav V2 已启动：http://127.0.0.1:{args.port}")
+    url = f"http://127.0.0.1:{args.port}"
+    print(f"Yav V2 已启动：{url}")
+    if args.open_browser:
+        Timer(0.4, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()
     finally:

@@ -149,3 +149,9 @@
 - 备份会复制实际存在的本地封面，并在 manifest 中记录缺失封面；不修改原数据、不会下载远程封面，也不覆盖既有备份。
 - 补充 Windows SQLite 连接显式关闭，保证备份完成后快照文件不被进程锁定。
 - README 同步为“验证登录”流程及备份使用方式。
+
+## 2026-07-26：完成 Windows 打包首版
+
+- 为 V2 新增独立浏览器启动器；默认打开本地界面，`--no-browser` 仅用于验收与排障。
+- 新建 PyInstaller spec，收集 `backend/static` 与 Playwright 组件；JPHOO 仍使用本机 Edge，不把浏览器 Profile 打进包内。
+- 使用 `dist\Yav-V2.exe --no-browser` 在新临时数据目录启动，首页返回 HTTP 200 且数据库创建成功。
