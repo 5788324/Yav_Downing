@@ -434,6 +434,35 @@ async function init() {
 
 init();
 
-async function sourcePanel(source,label){const [rows,status]=await Promise.all([request(`/api/sources/${source}`),request(`/api/sources/${source}/scan`)]);return `<h2>${label} 来源</h2><p>状态：${escapeHtml(status.status||'idle')}；当前页：${status.page||0}；发现：${status.discovered||0}；新增影片：${status.new_movies||0}；新增磁链：${status.new_magnets||0}；失败：${status.failures||0}${status.message?`；${escapeHtml(status.message)}`:''}</p><form class="source-form" data-source-form="${source}"><input name="name" placeholder="系列名称" required><input name="url" placeholder="${label} 系列网址" required><button>添加</button></form>${rows.map(x=>`<div class="source-row"><strong>${escapeHtml(x.name)}</strong><br><small>${escapeHtml(x.url)} · ${x.enabled?'已启用':'已停用'} · 完成页 ${x.last_completed_page||0}</small><br><button data-source="${source}" data-scan="${x.id}">全量扫描</button><button data-source="${source}" data-continue="${x.id}">继续扫描</button><button data-source="${source}" data-stop="${x.id}">停止</button><button data-source="${source}" data-delete-source="${x.id}">删除</button></div>`).join('')||`<p>尚未配置 ${label} 系列。</p>`}`}
-async function renderSources(){$('#sourceContent').innerHTML=await sourcePanel('javdb','JavDB')+await sourcePanel('jphoo','JPHOO')}
-$('#openSources').addEventListener('click',async()=>{$('#sourceOverlay').hidden=false;await renderSources()});$('#closeSources').addEventListener('click',()=>$('#sourceOverlay').hidden=true);$('#sourceOverlay').addEventListener('click',e=>{if(e.target===$('#sourceOverlay'))$('#sourceOverlay').hidden=true});$('#sourceContent').addEventListener('submit',async e=>{const f=e.target,source=f.dataset.sourceForm;if(!source)return;e.preventDefault();await request(`/api/sources/${source}`,{method:'POST',body:JSON.stringify({name:f.name.value,url:f.url.value,enabled:true})});await renderSources()});$('#sourceContent').addEventListener('click',async e=>{const b=e.target,source=b.dataset.source;if(!source)return;if(b.dataset.scan)await request(`/api/sources/${source}/${b.dataset.scan}/scan`,{method:'POST',body:'{}'});if(b.dataset.continue)await request(`/api/sources/${source}/${b.dataset.continue}/continue`,{method:'POST',body:'{}'});if(b.dataset.stop)await request(`/api/sources/${source}/${b.dataset.stop}/stop`,{method:'POST',body:'{}'});if(b.dataset.deleteSource)await request(`/api/sources/${source}/${b.dataset.deleteSource}`,{method:'DELETE'});await renderSources()});
+async function sourcePanel(source, label) {
+  const [rows, status, login] = await Promise.all([request(`/api/sources/${source}`), request(`/api/sources/${source}/scan`), source === 'jphoo' ? request('/api/sources/jphoo/login') : Promise.resolve({})]);
+  const extras = source === 'jphoo'
+    ? `<div class="source-login"><strong>JPHOO 登录</strong>：${escapeHtml(login.login || login.status || '请先检查')}
+       <button data-login="open">打开登录窗口</button><button data-login="check">检查登录状态</button><button data-login="close">完成登录</button></div>` : '';
+  const stats = `状态：${escapeHtml(status.status || 'idle')}；当前页：${status.page || 0}；发现：${status.discovered || 0}；处理：${status.processed || 0}；新增影片：${status.new_movies || 0}；新增磁链：${status.new_magnets || 0}；当前匹配：${status.matched_current || 0}；附带影片：${status.attached_other_movies || 0}；未匹配：${status.unmatched_candidates || 0}；失败：${status.failures || 0}${status.message ? `；错误：${escapeHtml(status.message)}` : ''}`;
+  const rowsHtml = rows.map(item => `<div class="source-row"><strong>${escapeHtml(item.name)}</strong><br><small>${escapeHtml(item.url)} · ${item.enabled ? '已启用' : '已停用'} · 完成页 ${item.last_completed_page || 0} · 最近扫描 ${escapeHtml(item.last_scanned_at || '无')}</small><br><button data-source="${source}" data-scan="${item.id}">全量扫描</button><button data-source="${source}" data-continue="${item.id}">继续扫描</button><button data-source="${source}" data-stop="${item.id}">停止</button><button data-source="${source}" data-edit-source="${item.id}">编辑</button><button data-source="${source}" data-toggle="${item.id}" data-enabled="${item.enabled ? '0' : '1'}">${item.enabled ? '停用' : '启用'}</button><button data-source="${source}" data-delete-source="${item.id}">删除</button></div>`).join('') || `<p>尚未配置 ${label} 系列。</p>`;
+  return `<h2>${label} 来源</h2>${extras}<p>${stats}</p><form class="source-form" data-source-form="${source}"><input name="name" placeholder="系列名称" required><input name="url" placeholder="${label} 系列网址" required>${source === 'jphoo' ? '<input name="profile_dir" placeholder="浏览器资料目录（留空使用默认）">' : ''}<button>添加</button></form>${rowsHtml}`;
+}
+async function renderSources() {
+  $('#sourceContent').innerHTML = await sourcePanel('javdb', 'JavDB') + await sourcePanel('jphoo', 'JPHOO');
+}
+$('#openSources').addEventListener('click', async () => { $('#sourceOverlay').hidden = false; await renderSources(); });
+$('#closeSources').addEventListener('click', () => $('#sourceOverlay').hidden = true);
+$('#sourceOverlay').addEventListener('click', event => { if (event.target === $('#sourceOverlay')) $('#sourceOverlay').hidden = true; });
+$('#sourceContent').addEventListener('submit', async event => {
+  const form = event.target, source = form.dataset.sourceForm; if (!source) return;
+  event.preventDefault(); await request(`/api/sources/${source}`, {method: 'POST', body: JSON.stringify({name: form.name.value, url: form.url.value, enabled: true, profile_dir: form.profile_dir ? form.profile_dir.value : ''})}); await renderSources();
+});
+$('#sourceContent').addEventListener('click', async event => {
+  const button = event.target, source = button.dataset.source;
+  if (button.dataset.login) { await request(`/api/sources/jphoo/login/${button.dataset.login}`, {method: 'POST', body: '{}'}); await renderSources(); return; }
+  if (!source) return;
+  if (button.dataset.scan) await request(`/api/sources/${source}/${button.dataset.scan}/scan`, {method: 'POST', body: '{}'});
+  if (button.dataset.continue) await request(`/api/sources/${source}/${button.dataset.continue}/continue`, {method: 'POST', body: '{}'});
+  if (button.dataset.stop) await request(`/api/sources/${source}/${button.dataset.stop}/stop`, {method: 'POST', body: '{}'});
+  if (button.dataset.editSource) { const item = (await request(`/api/sources/${source}`)).find(row => String(row.id) === button.dataset.editSource); if (item) { const name = window.prompt('系列名称', item.name); const url = window.prompt('系列网址', item.url); if (name && url) await request(`/api/sources/${source}`, {method: 'POST', body: JSON.stringify({...item, name, url, series_id: item.id})}); } }
+  if (button.dataset.toggle) { const item = (await request(`/api/sources/${source}`)).find(row => String(row.id) === button.dataset.toggle); if (item) await request(`/api/sources/${source}`, {method: 'POST', body: JSON.stringify({...item, enabled: button.dataset.enabled === '1', series_id: item.id})}); }
+  if (button.dataset.deleteSource) await request(`/api/sources/${source}/${button.dataset.deleteSource}`, {method: 'DELETE'});
+  await renderSources();
+});
+setInterval(() => { if (!$('#sourceOverlay').hidden) renderSources().catch(() => {}); }, 3000);

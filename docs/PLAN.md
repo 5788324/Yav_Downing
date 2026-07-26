@@ -138,3 +138,14 @@
 - [x] 弹窗候选磁链的 API/DOM 回退和严格标题归属
 - [x] 临时 SQLite 幂等验证
 - [ ] 临时 V2 副本上的人工登录真实小系列扫描
+
+## JPHOO 来源迁移验收（2026-07-26）
+
+- [x] JPHOO 系列配置（SQLite，含启用状态、断点页码和可选专用 profile 路径）
+- [x] 打开/检查/完成 JPHOO 专用 Edge 登录窗口；登录失效返回 `login_required`
+- [x] HTTP 优先 `pageNum` 列表，浏览器回退；后台线程扫描和停止/继续
+- [x] 弹窗接口、DOM、复制按钮后备；接口 `infoHash` 构造标准磁链 URI
+- [x] 严格标题归属：当前、附带其他影片、unknown 三类
+- [x] 临时 V2 副本真实扫描：Brazzers Exxtra 第 1–3 页的受控验证
+
+可以开始两个来源的受控全量重新扫描；仍应先从小系列或少量页面开始，并观察登录状态与 `unmatched_candidates`。

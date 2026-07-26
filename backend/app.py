@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .db import LibraryDatabase
-from .scanner import ScanManager, JphooScanManager
+from .scanner import ScanManager, JphooLoginManager, JphooScanManager
 
 STATIC_DIR = Path(__file__).with_name("static")
 
@@ -19,6 +19,7 @@ class Handler(BaseHTTPRequestHandler):
     database: LibraryDatabase | None = None
     scans: ScanManager | None = None
     jphoo_scans: JphooScanManager | None = None
+    jphoo_login: JphooLoginManager | None = None
 
     def _json(self, data, status=200):
         payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -83,6 +84,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/sources/javdb":
             self._json(self.database.list_source_series())
+            return
+
+        if path == "/api/sources/jphoo/login":
+            self._json(self.jphoo_login.status() if self.jphoo_login else {"status":"idle","login":"unknown"})
             return
 
         if path == "/api/sources/jphoo/scan":
@@ -155,10 +160,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error":str(exc)},400)
             return
 
+        login_action = re.fullmatch(r"/api/sources/jphoo/login/(open|check|close)", urlparse(self.path).path)
+        if login_action:
+            try:
+                if not self.jphoo_login: raise ValueError("JPHOO 登录窗口未初始化")
+                action = login_action.group(1)
+                self._json(getattr(self.jphoo_login, action)(), 202)
+            except (ValueError, TypeError) as exc:
+                self._json({"error": str(exc)}, 400)
+            return
+
         jphoo_action = re.fullmatch(r"/api/sources/jphoo/(\d+)/(scan|continue|stop)", urlparse(self.path).path)
         if jphoo_action:
             try:
                 if not self.jphoo_scans: raise ValueError("JPHOO 扫描器未初始化")
+                if self.jphoo_login and self.jphoo_login.status().get("window_open"): raise ValueError("请先在登录窗口点击完成登录")
                 action,series_id=jphoo_action.group(2),int(jphoo_action.group(1))
                 self._json(self.jphoo_scans.stop() if action == "stop" else self.jphoo_scans.start(series_id, action == "scan"), 202)
             except (ValueError, TypeError) as exc:
@@ -220,6 +236,7 @@ def main():
     Handler.database = LibraryDatabase(args.data_dir / "library.db")
     Handler.scans = ScanManager(Handler.database)
     Handler.jphoo_scans = JphooScanManager(Handler.database, args.data_dir / "browser-profile" / "jphoo")
+    Handler.jphoo_login = JphooLoginManager(args.data_dir / "browser-profile" / "jphoo")
     print(f"Yav V2 已启动：http://127.0.0.1:{args.port}")
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
 

@@ -141,7 +141,19 @@ CREATE TABLE IF NOT EXISTS scan_runs(
 CREATE INDEX IF NOT EXISTS idx_source_series_source ON source_series(source,enabled);
                 """
             )
-            db.execute("UPDATE schema_meta SET value='2' WHERE key='schema_version'")
+            for statement in (
+                "ALTER TABLE source_series ADD COLUMN profile_dir TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE scan_runs ADD COLUMN processed_count INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE scan_runs ADD COLUMN matched_current INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE scan_runs ADD COLUMN attached_other_movies INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE scan_runs ADD COLUMN unmatched_candidates INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE scan_runs ADD COLUMN last_error TEXT NOT NULL DEFAULT ''",
+            ):
+                try:
+                    db.execute(statement)
+                except sqlite3.OperationalError:
+                    pass
+            db.execute("UPDATE schema_meta SET value='3' WHERE key='schema_version'")
             db.execute("UPDATE scan_runs SET status='interrupted', finished_at=? WHERE status='running'", (self.now(),))
 
     @staticmethod
@@ -155,6 +167,12 @@ CREATE INDEX IF NOT EXISTS idx_source_series_source ON source_series(source,enab
         except (TypeError, ValueError, json.JSONDecodeError):
             return set()
 
+    def movie_import_exists(self, title: str, source: str, source_url: str) -> bool:
+        """来源页或同名聚合片已存在时，扫描统计不再误报为新增。"""
+        with self.connect() as db:
+            if source and source_url and db.execute("SELECT 1 FROM source_entries WHERE source=? AND source_url=?", (source, source_url)).fetchone():
+                return True
+            return bool(db.execute("SELECT 1 FROM movies WHERE normalized_title=?", (normalize_title(title),)).fetchone())
     def add_or_update_movie(
         self,
         title,
@@ -687,16 +705,29 @@ CREATE INDEX IF NOT EXISTS idx_source_series_source ON source_series(source,enab
 
     def list_source_series(self, source="javdb"):
         with self.connect() as db:
-            return [dict(row) for row in db.execute("SELECT * FROM source_series WHERE source=? ORDER BY name,id",(source,))]
+            rows = db.execute(
+                """SELECT ss.*, sr.status AS scan_status, sr.current_page, sr.discovered,
+                          sr.processed_count, sr.new_movies, sr.new_magnets, sr.failures,
+                          sr.matched_current, sr.attached_other_movies, sr.unmatched_candidates,
+                          sr.last_error, sr.finished_at AS last_run_finished_at
+                   FROM source_series ss
+                   LEFT JOIN scan_runs sr ON sr.id=(SELECT id FROM scan_runs WHERE series_id=ss.id ORDER BY id DESC LIMIT 1)
+                   WHERE ss.source=? ORDER BY ss.name,ss.id""", (source,)
+            ).fetchall()
+            return [dict(row) for row in rows]
 
-    def save_source_series(self, name, url, enabled=True, series_id=None, source="javdb"):
-        name,url=str(name or '').strip(),str(url or '').strip()
-        if not name or not url.startswith(('https://','http://')): raise ValueError('请填写系列名称和有效网址')
+    def save_source_series(self, name, url, enabled=True, series_id=None, source="javdb", profile_dir=""):
+        name, url = str(name or "").strip(), str(url or "").strip()
+        if source not in {"javdb", "jphoo"}:
+            raise ValueError("不支持的来源")
+        if not name or not url.startswith(("https://", "http://")):
+            raise ValueError("请填写系列名称和有效网址")
         with self.connect() as db:
             if series_id:
-                db.execute("UPDATE source_series SET name=?,url=?,enabled=? WHERE id=? AND source=?",(name,url,int(bool(enabled)),series_id,source))
+                db.execute("UPDATE source_series SET name=?,url=?,enabled=?,profile_dir=? WHERE id=? AND source=?", (name,url,int(bool(enabled)),str(profile_dir or ""),series_id,source))
                 return int(series_id)
-            return db.execute("INSERT INTO source_series(source,name,url,enabled) VALUES(?,?,?,?)",(source,name,url,int(bool(enabled)))).lastrowid
+            return db.execute("INSERT INTO source_series(source,name,url,enabled,profile_dir) VALUES(?,?,?,?,?)", (source,name,url,int(bool(enabled)),str(profile_dir or ""))).lastrowid
 
     def delete_source_series(self, series_id):
-        with self.connect() as db: return db.execute("DELETE FROM source_series WHERE id=?",(series_id,)).rowcount>0
+        with self.connect() as db:
+            return db.execute("DELETE FROM source_series WHERE id=?", (series_id,)).rowcount > 0
