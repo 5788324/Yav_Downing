@@ -49,3 +49,6 @@ local_config.json
 *.log
 backups/
 exports/
+
+# 本地发布包与验收产物
+release/

@@ -9,6 +9,8 @@ from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
+from .runtime import APP_VERSION
+
 
 def _timestamp() -> str:
     return datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
@@ -32,12 +34,13 @@ def backup_data_dir(data_dir: str | Path, output_dir: str | Path | None = None) 
         backup_dir = backup_root / f"yav-v2-backup-{_timestamp()}-{suffix}"
         suffix += 1
     backup_dir.mkdir(parents=True)
-    copied, missing = [], []
+    copied, missing, files = [], [], []
     try:
         snapshot = backup_dir / "library.db"
         _backup_sqlite(database_path, snapshot)
+        files.append({"path": "library.db", "kind": "database", "size_bytes": snapshot.stat().st_size})
         covers_dir = backup_dir / "covers"
-        with closing(sqlite3.connect(database_path)) as db:
+        with closing(sqlite3.connect(snapshot)) as db:
             rows = db.execute("SELECT id, cover_path FROM movies WHERE cover_path <> '' ORDER BY id").fetchall()
         for movie_id, raw_path in rows:
             cover = Path(raw_path)
@@ -48,15 +51,20 @@ def backup_data_dir(data_dir: str | Path, output_dir: str | Path | None = None) 
             destination = covers_dir / f"{int(movie_id)}{extension}"
             covers_dir.mkdir(exist_ok=True)
             shutil.copy2(cover, destination)
-            copied.append({"movie_id": int(movie_id), "file": destination.name})
+            relative = destination.relative_to(backup_dir).as_posix()
+            copied.append({"movie_id": int(movie_id), "file": relative})
+            files.append({"path": relative, "kind": "cover", "size_bytes": destination.stat().st_size})
         manifest = {
+            "backup_format": 1,
+            "app_version": APP_VERSION,
             "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "database": "library.db",
+            "files": files,
             "local_covers": copied,
             "missing_cover_movie_ids": missing,
         }
         (backup_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-        return {"backup_dir": str(backup_dir), "database": str(snapshot), "copied_covers": len(copied), "missing_covers": len(missing)}
+        return {"backup_dir": str(backup_dir), "database": str(snapshot), "copied_covers": len(copied), "missing_covers": len(missing), "files": files}
     except Exception:
         shutil.rmtree(backup_dir, ignore_errors=True)
         raise

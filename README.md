@@ -122,3 +122,7 @@ V1 的现有代码和研究记录仍保留在仓库中，供迁移 JavDB/JPHOO �
 ## JPHOO 来源扫描
 
 在左侧导航打开“来源管理”，在 JPHOO 区域配置系列。首次使用时点击“打开登录窗口”，只在 Yav V2 专用 Edge 中手动登录；登录完成后点击“验证登录”；显示 ready 后可执行全量扫描或继续扫描。扫描期间关闭会话或退出程序会先安全停止扫描，再释放浏览器 Profile。登录资料保存在 `%LOCALAPPDATA%\Yav\v2\browser-profile\jphoo`，不会提交到仓库。
+
+## Windows 使用
+
+发布版支持 --data-dir、--port、--no-browser、--backup、--restore、--migrate-v1 和 --dry-run。详见 [Windows 安装](docs/INSTALL_WINDOWS.md)、[V1 迁移](docs/MIGRATE_V1_TO_V2.md)、[备份恢复](docs/BACKUP_RESTORE.md) 和 [发布清单](docs/RELEASE_CHECKLIST.md)。

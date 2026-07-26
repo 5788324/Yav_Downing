@@ -149,3 +149,10 @@
 - 新增 `yav_v2.py` 启动器和 `yav_v2.spec`；PyInstaller 会收集静态界面与 Playwright 运行组件。
 - 生成 `dist\Yav-V2.exe` 后双击自动打开本地浏览器，业务数据仍固定在 `%LOCALAPPDATA%\Yav\v2`。
 - 临时数据目录烟雾验证通过：exe 启动后首页 HTTP 200，自动创建临时 `library.db`；build/dist、临时数据和 exe 均不提交。
+
+## 2026-07-26 发布候选
+
+- 已实现统一 Yav-V2.exe 参数、日志轮转/脱敏、单实例与端口回退。
+- V1 迁移默认 dry-run，旧库只读；正式导入已有 V2 前自动备份。
+- 备份清单包含版本、时间与文件大小；恢复先校验、可演练、会预先备份且不触碰浏览器 profile。
+- 自动测试 38 项通过。待做：全新 Windows 环境和发布版 JPHOO 手工验收。

@@ -30,7 +30,9 @@ class BackupTests(unittest.TestCase):
             self.assertTrue((backup_dir / "library.db").is_file())
             self.assertEqual((backup_dir / "covers" / f"{first}.jpg").read_bytes(), b"cover-data")
             manifest = json.loads((backup_dir / "manifest.json").read_text(encoding="utf-8"))
-            self.assertEqual(manifest["local_covers"], [{"movie_id": first, "file": f"{first}.jpg"}])
+            self.assertEqual(manifest["local_covers"], [{"movie_id": first, "file": f"covers/{first}.jpg"}])
+            self.assertEqual(manifest["backup_format"], 1)
+            self.assertEqual(manifest["files"][0]["path"], "library.db")
             self.assertEqual(manifest["missing_cover_movie_ids"], [second])
             with closing(sqlite3.connect(backup_dir / "library.db")) as snapshot:
                 self.assertEqual(snapshot.execute("SELECT COUNT(*) FROM movies").fetchone()[0], 2)
