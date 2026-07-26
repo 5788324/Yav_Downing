@@ -18,3 +18,10 @@
 ## RC2 打包版 JPHOO 临时验收
 
 使用先前独立临时 profile 的新副本完成：首次打开为 `ready`，应用正常退出并重启后仍为 `ready`；小范围继续扫描进入 `running`，停止请求进入 `stopping`，随后使用安全退出关闭应用。进程、端口和锁均释放，临时 profile 仍存在。未修改正式 V2 数据或 profile。
+
+## RC3 补充验收
+
+- [x] 独立空库启动后，页面正常显示迁移引导和“安全退出 Yav”入口。
+- [x] 同一 RC3 实例的 `--shutdown` 实测释放端口、实例锁和临时运行凭据。
+- [x] `python -m compileall backend tests yav_v2.py`、39 项单元测试、`node --check backend/static/app.js` 与 `git diff --check` 通过。
+- [x] 临时验收数据库和运行目录已删除；没有修改正式 V1/V2 数据、浏览器 profile 或 V1 磁链。
