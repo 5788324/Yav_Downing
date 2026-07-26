@@ -129,3 +129,11 @@
 - 真实临时副本验证：打开 `ready`、验证 `ready`、关闭 `unknown`、新会话重开仍为 `ready`；认证来自 6 个本地存储键，未见密码框。
 
 已知限制：JPHOO 站点主动使认证失效时仍需用户在统一 Profile 中手动登录一次；本轮不会绕过站点认证或增加激进重试。
+
+## 2026-07-26：JPHOO 扫描中退出补充修复
+
+- 扫描中点击“关闭会话”会自动请求停止、保存 `stopping`，扫描安全退出后由原专用线程关闭 Edge context；不再把关闭命令排在扫描之后被动等待。
+- 应用 `shutdown()` 使用相同链路，并等待工作线程实际结束后再返回，确保 Profile 锁释放；扫描尚未真正启动时也会取消排队扫描并关闭会话。
+- 登录状态不再因任意 Cookie/localStorage 直接显示 `ready`：除非检测到受保护的用户菜单或认证命名存储标记，否则保持 `unknown`。
+- 新增隔离回归：扫描中 close、扫描中 shutdown、线程结束、browser closed、scanner 清空和数据库 `stopping` 状态；全套 30 项测试通过。
+- 新临时 V2 副本真实验证：真实 JPHOO 扫描已启动后立即 shutdown，线程与 browser 均释放，最终状态 `closed / unknown`；重开同一复制 Profile 的登录验证仍为 `ready`。

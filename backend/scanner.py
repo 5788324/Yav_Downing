@@ -144,6 +144,7 @@ class JphooSessionManager:
         self.browser_factory = browser_factory
         self.queue, self.thread, self.browser, self.scanner = Queue(), None, None, None
         self.lock, self.probe_pending = Lock(), Event()
+        self.close_after_scan, self.shutdown_requested = Event(), Event()
         self.series_id = None
         self.result = {"status": "closed", "login": "unknown", "session_state": "closed", "profile_dir": self.profile_dir, "window_open": False}
 
@@ -205,6 +206,11 @@ class JphooSessionManager:
     def close(self):
         if not self.browser and not (self.thread and self.thread.is_alive()):
             return self.status()
+        if self.scanner or self._snapshot().get("scanning"):
+            self.close_after_scan.set()
+            self._set(status="stopping", close_after_scan=True)
+            self.stop()
+            return self.status()
         self._set(status="closing")
         self._post("close")
         return self.status()
@@ -222,11 +228,12 @@ class JphooSessionManager:
         return self.status()
 
     def stop(self):
-        if self.scanner:
-            self.scanner.stop()
+        scanner = self.scanner
+        self._set(status="stopping", scanning=bool(scanner))
         if self.series_id:
             self.database.set_scan_stopping(self.series_id, self.source_name)
-        self._set(status="stopping", scanning=bool(self.scanner))
+        if scanner:
+            scanner.stop()
         return self.status()
 
     def is_running_series(self, series_id):
@@ -239,17 +246,29 @@ class JphooSessionManager:
             self._post("probe")
         data = self._snapshot()
         latest = self.database.latest_scan_status(self.source_name)
-        if latest and (self.scanner or latest["status"] in {"running", "stopping"}):
+        if latest and (self.scanner or data.get("status") in {"starting", "running", "stopping"}):
             data.update(latest)
         data["running"] = bool(self.scanner)
         data["profile_dir"] = self.profile_dir
         return data
 
     def shutdown(self):
+        """退出前先请求扫描安全停止，再由浏览器所属线程释放 Profile。"""
+        self.shutdown_requested.set()
+        if self.scanner or self._snapshot().get("scanning"):
+            self._set(status="stopping", close_after_scan=True)
+            self.stop()
         if self.thread and self.thread.is_alive():
             self._post("shutdown")
-            self.thread.join(timeout=5)
+            self.thread.join()
 
+    def _close_browser(self):
+        """只能由会话专用线程调用。"""
+        if self.browser:
+            self.browser.close()
+        self.browser = None
+        self.scanner = None
+        self._set(status="closed", login="unknown", session_state="closed", window_open=False, scanning=False, close_after_scan=False)
     def _worker(self):
         from .sources.jphoo import JphooSource
         while True:
@@ -272,6 +291,11 @@ class JphooSessionManager:
                         self.browser = None
                         self._set(status="closed", login="unknown", session_state="closed", window_open=False, scanning=False)
                 elif command == "scan":
+                    if self.close_after_scan.is_set() or self.shutdown_requested.is_set():
+                        self._close_browser()
+                        if self.shutdown_requested.is_set():
+                            return
+                        continue
                     series = self._series(payload["series_id"])
                     browser = self._open_browser()
                     browser.page.goto(series["url"], wait_until="domcontentloaded", timeout=45000)
@@ -283,13 +307,15 @@ class JphooSessionManager:
                     self._set(status="running", scanning=True, series_id=series["id"], series_name=series["name"], source=self.source_name)
                     result = self.scanner.run(series["id"], payload["from_start"])
                     self.scanner = None
+                    if self.close_after_scan.is_set() or self.shutdown_requested.is_set():
+                        self._close_browser()
+                        if self.shutdown_requested.is_set():
+                            return
+                        self.close_after_scan.clear()
+                        continue
                     self._set(**result, scanning=False, status=result["status"], login="login_required" if result["status"] == "login_required" else self._snapshot().get("login", "unknown"))
                 elif command in {"close", "shutdown"}:
-                    if self.browser:
-                        self.browser.close()
-                    self.browser = None
-                    self.scanner = None
-                    self._set(status="closed", login="unknown", session_state="closed", window_open=False, scanning=False)
+                    self._close_browser()
                     if command == "shutdown":
                         return
             except Exception as exc:

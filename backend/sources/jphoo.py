@@ -107,8 +107,8 @@ def parse_movie_html(html: str, url: str) -> SourceMovie:
     return SourceMovie(title=title, source_url=url, cover_url=cover_url, studio=first('a[href*="studio"],a[href*="maker"],a[href*="publisher"]'), series=first('a[href*="series"],a[href*="tag"]'), release_date=date.group(1).replace("/", "-").replace(".", "-") if date else "", duration_minutes=int(duration.group(1)) if duration else None, actresses=list(dict.fromkeys(actresses)))
 
 
-def authentication_state(current_url: str, password_visible: int, domain_cookie_count: int, local_storage_keys: int, session_storage_keys: int) -> tuple[str, list[str]]:
-    """纯函数：unknown 不会被当作 login_required。"""
+def authentication_state(current_url: str, password_visible: int, domain_cookie_count: int, local_storage_keys: int, session_storage_keys: int, protected_auth_marker: bool = False) -> tuple[str, list[str]]:
+    """只在明确登录态成立时返回 ready；unknown 不会被当作 login_required。"""
     signals: list[str] = []
     if "/login" in (current_url or "").lower():
         signals.append("login_url")
@@ -116,8 +116,10 @@ def authentication_state(current_url: str, password_visible: int, domain_cookie_
         signals.append("visible_password_form")
     if signals:
         return "login_required", signals
+    if protected_auth_marker:
+        return "ready", ["protected_auth_marker_present"]
     if domain_cookie_count or local_storage_keys or session_storage_keys:
-        return "ready", ["authentication_storage_present"]
+        return "unknown", ["authentication_storage_unverified"]
     return "unknown", ["no_explicit_login_signal"]
 
 class JphooBrowser:
@@ -153,7 +155,7 @@ class JphooBrowser:
     def diagnose(self, target_url: str) -> dict:
         """只返回认证存储数量和可见 UI 信号，绝不返回敏感值。"""
         profile = Path(self.profile_dir)
-        result = {"profile_dir": self.profile_dir, "profile_exists": profile.exists(), "profile_size_bytes": sum(path.stat().st_size for path in profile.rglob("*") if path.is_file()), "target_url": target_url, "target_origin": f"{urlparse(target_url).scheme}://{urlparse(target_url).netloc}", "current_url": "", "password_visible": 0, "password_hidden": 0, "cookie_count": 0, "domain_cookie_count": 0, "local_storage_keys": 0, "session_storage_keys": 0, "signals": [], "login": "unknown"}
+        result = {"profile_dir": self.profile_dir, "profile_exists": profile.exists(), "profile_size_bytes": sum(path.stat().st_size for path in profile.rglob("*") if path.is_file()), "target_url": target_url, "target_origin": f"{urlparse(target_url).scheme}://{urlparse(target_url).netloc}", "current_url": "", "password_visible": 0, "password_hidden": 0, "cookie_count": 0, "domain_cookie_count": 0, "local_storage_keys": 0, "session_storage_keys": 0, "protected_auth_marker": False, "signals": [], "login": "unknown"}
         if not self.is_open():
             result["signals"].append("browser_closed"); result["session_state"] = "closed"; return result
         page = self.page
@@ -164,9 +166,11 @@ class JphooBrowser:
             cookies = self.context.cookies(); result["cookie_count"] = len(cookies)
             host = (urlparse(target_url).hostname or "").lstrip(".")
             result["domain_cookie_count"] = sum(1 for cookie in cookies if host == cookie.get("domain", "").lstrip(".") or host.endswith("." + cookie.get("domain", "").lstrip(".")))
-            stores = page.evaluate("() => ({local: Object.keys(localStorage).length, session: Object.keys(sessionStorage).length})")
+            stores = page.evaluate("""() => { const keys = [...Object.keys(localStorage), ...Object.keys(sessionStorage)]; return {local: Object.keys(localStorage).length, session: Object.keys(sessionStorage).length, authKey: keys.some(key => /(?:auth|token|login|session|user)/i.test(key))}; }""")
             result["local_storage_keys"], result["session_storage_keys"] = int(stores.get("local", 0)), int(stores.get("session", 0))
-            result["login"], result["signals"] = authentication_state(result["current_url"], visible, result["domain_cookie_count"], result["local_storage_keys"], result["session_storage_keys"])
+            user_menu = page.locator('a[href*="logout"], [data-testid*="user"], [class*="user-menu"], [aria-label*="账户"], [aria-label*="账号"]').count() > 0
+            result["protected_auth_marker"] = bool(user_menu or stores.get("authKey"))
+            result["login"], result["signals"] = authentication_state(result["current_url"], visible, result["domain_cookie_count"], result["local_storage_keys"], result["session_storage_keys"], result["protected_auth_marker"])
             result["session_state"] = "open"
         except Exception as exc:
             result["signals"].append(f"diagnostic_error:{type(exc).__name__}"); result["session_state"] = "unknown"

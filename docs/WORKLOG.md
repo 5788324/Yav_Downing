@@ -134,3 +134,11 @@
 - 登录检测只把登录 URL 或可见密码表单认定为 `login_required`；认证存储存在时为 `ready`，其余为 `unknown`。诊断只保存计数和状态，不写入敏感值。
 - 新增会话测试，覆盖隐藏密码框、真实系列 origin、统一 Profile、关闭状态和存活探测；全套 27 项测试通过。
 - 真实验收使用 `C:\tmp\yav-jphoo-session-fix-20260726` 新临时副本及复制的临时 Profile：打开/验证均为 ready，关闭为 unknown，重启会话后仍为 ready。临时库、Profile 和任何浏览器数据均不提交。
+
+## 2026-07-26：补齐 JPHOO 扫描中退出
+
+- 外部生命周期测试指出：扫描同步运行时，旧 `close()`/`shutdown()` 仅排队命令，可能让 Edge 和 Profile 在 5 秒后仍被占用。
+- 修复为自动安全停止：先标记 `stopping` 并通知当前扫描器 stop；扫描返回后同一专用线程立即释放 persistent context。`shutdown()` 等待此线程结束，普通 close 则保留会话线程以便后续重新打开。
+- 修复停止与扫描返回之间的状态竞态，已关闭会话不再被数据库中历史 `stopping` 记录覆盖。
+- 登录诊断要求受保护认证标记（用户菜单或认证命名存储键），普通网站 Cookie/偏好存储只显示 unknown；不记录键名、Cookie、令牌或值。
+- 临时真实 JPHOO 扫描启动后立即 shutdown：scanner 已启动，线程结束、browser/scanner 均释放，最终 closed。30 项自动测试通过。
