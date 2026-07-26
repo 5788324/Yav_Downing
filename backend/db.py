@@ -142,6 +142,7 @@ CREATE INDEX IF NOT EXISTS idx_source_series_source ON source_series(source,enab
                 """
             )
             db.execute("UPDATE schema_meta SET value='2' WHERE key='schema_version'")
+            db.execute("UPDATE scan_runs SET status='interrupted', finished_at=? WHERE status='running'", (self.now(),))
 
     @staticmethod
     def now() -> str:

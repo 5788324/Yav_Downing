@@ -45,3 +45,11 @@ class ScanManagerTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d:
    manager=ScanManager(LibraryDatabase(Path(d)/'library.db'))
    self.assertFalse(manager.status()['running']); self.assertEqual(manager.stop()['status'],'idle')
+
+class RecoveryTests(unittest.TestCase):
+ def test_stale_running_scan_is_interrupted_on_open(self):
+  with tempfile.TemporaryDirectory() as d:
+   path=Path(d)/'library.db'; db=LibraryDatabase(path); sid=db.save_source_series('s','https://x/s')
+   with db.connect() as c: c.execute("INSERT INTO scan_runs(series_id,status,started_at) VALUES(?,?,?)",(sid,'running','old'))
+   reopened=LibraryDatabase(path)
+   with reopened.connect() as c: self.assertEqual(c.execute('SELECT status FROM scan_runs').fetchone()[0],'interrupted')
