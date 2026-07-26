@@ -59,3 +59,7 @@ CREATE INDEX IF NOT EXISTS idx_movies_title ON movies(normalized_title); CREATE 
             btih=extract_btih(magnet); db.execute("INSERT OR IGNORE INTO magnets(movie_id,magnet,btih,size_bytes,discovered_at) VALUES(?,?,?,?,?)",(movie_id,magnet,btih,size_bytes,self.now())); mid=db.execute("SELECT id FROM magnets WHERE movie_id=? AND btih=?",(movie_id,btih)).fetchone()['id']; db.execute("INSERT OR IGNORE INTO magnet_sources VALUES(?,?)",(mid,entry['id'])); return mid
     def list_movies(self,query="",limit=60):
         with self.connect() as db: return [dict(r) for r in db.execute("SELECT m.*,(SELECT COUNT(*) FROM magnets x WHERE x.movie_id=m.id) magnet_count FROM movies m WHERE m.title LIKE ? OR m.normalized_title LIKE ? ORDER BY favorite DESC,updated_at DESC LIMIT ?",(f'%{query}%',f'%{normalize_title(query)}%',limit))]
+
+    def set_favorite(self, movie_id, favorite):
+        with self.connect() as db:
+            db.execute("UPDATE movies SET favorite=?, updated_at=? WHERE id=?", (int(bool(favorite)), self.now(), movie_id))

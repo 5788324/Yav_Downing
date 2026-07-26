@@ -30,7 +30,7 @@ def migrate(old_db, new_db, apply=False):
         for work,actors,magnets in legacy_rows(old_db):
             title=work['title_manual'] or work['title_auto'] or work['code_manual'] or work['code_auto'] or '（资料待补全）'
             movie_id=target.add_or_update_movie(title,studio=work['publisher_manual'] or work['publisher_auto'] or '',series=work['series'] or '',release_date=work['release_date_manual'] or work['release_date_auto'] or '',cover_url=work['cover_url_manual'] or work['cover_url_auto'] or '',actresses=actors,source=work['site'],source_url=work['source_url'])
-            seen['movies'] += 1; source_count[work['site']] += 1
+            target.set_favorite(movie_id, work['favorite']); seen['movies'] += 1; source_count[work['site']] += 1
             for magnet in magnets:
                 try: target.add_magnet(movie_id,magnet['magnet'],magnet['source_site'] or work['site'],work['source_url'],size_bytes=round(float(magnet['size_gb'] or 0)*1024**3)); seen['magnets'] += 1
                 except ValueError: invalid += 1
@@ -49,4 +49,5 @@ def main():
     args=parser.parse_args(); report=migrate(args.old_db,args.new_db,args.apply)
     print('模式：',report['mode']); print('旧库：',report['old_db']); print('新库：',report['new_db']); print('迁移前：',report['before']); print('扫描/导入：',report['scanned']); print('按来源：',report['sources']); print('迁移后：',report['after']); print('无效磁链：',report['invalid_magnets'])
 if __name__=='__main__': main()
+
 
