@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#11110f">
+  <title>Yav · 私人影片图书馆</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand-block">
+        <div class="brand-mark">Y</div>
+        <div>
+          <div class="brand-name">Yav</div>
+          <div class="brand-subtitle">私人磁链图书馆</div>
+        </div>
+      </div>
+
+      <nav class="nav-stack" aria-label="快速筛选">
+        <button class="nav-item is-active" data-quick="all" aria-current="page">
+          <span class="nav-icon">▦</span><span>全部影片</span><strong id="navTotal">0</strong>
+        </button>
+        <button class="nav-item" data-quick="favorite">
+          <span class="nav-icon">♥</span><span>我的收藏</span><strong id="navFavorites">0</strong>
+        </button>
+        <button class="nav-item" data-quick="with-magnets">
+          <span class="nav-icon">⌁</span><span>已有磁链</span><strong id="navWithMagnets">0</strong>
+        </button>
+        <button class="nav-item" data-quick="without-magnets">
+          <span class="nav-icon">○</span><span>等待补全</span><strong id="navWithoutMagnets">0</strong>
+        </button>
+        <div class="nav-divider" aria-hidden="true"></div>
+        <button class="nav-item" id="openSources" type="button">
+          <span class="nav-icon">⌘</span><span>来源管理</span><strong>›</strong>
+        </button>
+      </nav>
+
+      <section class="sidebar-section">
+        <div class="section-kicker">分类浏览</div>
+        <button class="category-link" data-focus="studio"><span>厂商</span><small>按制作方筛选</small></button>
+        <button class="category-link" data-focus="series"><span>系列</span><small>按作品系列筛选</small></button>
+        <button class="category-link" data-focus="actress"><span>女演员</span><small>按出演者筛选</small></button>
+      </section>
+
+      <button id="shutdownApp" class="clear-btn" type="button" aria-label="安全退出 Yav">安全退出 Yav</button>
+      <div class="sidebar-foot">
+        <div class="local-badge"><span class="pulse"></span>仅在本机运行</div>
+        <p>磁链是核心，资料由多个来源互补。</p>
+      </div>
+    </aside>
+
+    <main class="main-stage">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">MY PRIVATE ARCHIVE</div>
+          <h1>影片图书馆</h1>
+          <p id="resultSummary">正在读取资料库…</p>
+        </div>
+        <div class="topbar-actions">
+          <div class="view-switcher" aria-label="视图风格">
+            <button class="view-btn is-active" aria-pressed="true" data-view="gallery" title="海报墙">海报墙</button>
+            <button class="view-btn" aria-pressed="false" data-view="shelf" title="收藏架">收藏架</button>
+            <button class="view-btn" aria-pressed="false" data-view="catalog" title="资料册">资料册</button>
+          </div>
+        </div>
+      </header>
+
+      <section class="hero-panel">
+        <div class="hero-copy">
+          <span class="hero-tag">MULTI-SOURCE LIBRARY</span>
+          <h2>把分散在不同来源的磁链，整理成一座自己的图书馆。</h2>
+          <p>影片名负责识别，磁链负责收藏；封面、厂商、系列和女演员信息由 JavDB、JPHOO 与未来来源逐步补全。</p>
+        </div>
+        <div class="hero-stats">
+          <article><span>影片</span><strong id="statMovies">0</strong></article>
+          <article><span>唯一磁链</span><strong id="statMagnets">0</strong></article>
+          <article><span>收藏</span><strong id="statFavorites">0</strong></article>
+        </div>
+      </section>
+
+      <section class="filter-panel">
+        <label class="search-box">
+          <span>⌕</span>
+          <input id="searchInput" type="search" placeholder="搜索影片名" autocomplete="off">
+          <kbd>Enter</kbd>
+        </label>
+        <div class="filter-grid">
+          <label><span>厂商</span><select id="studioFilter"></select></label>
+          <label><span>系列</span><select id="seriesFilter"></select></label>
+          <label><span>女演员</span><select id="actressFilter"></select></label>
+          <label><span>磁链来源</span><select id="sourceFilter" aria-label="磁链来源"></select></label>
+          <label><span>磁链状态</span>
+            <select id="magnetFilter">
+              <option value="">全部</option>
+              <option value="true">有磁链</option>
+              <option value="false">无磁链</option>
+            </select>
+          </label>
+          <button id="clearFilters" class="clear-btn">清除筛选</button>
+        </div>
+      </section>
+
+      <section class="content-head">
+        <div>
+          <span class="content-kicker">LIBRARY SELECTION</span>
+          <h3 id="contentTitle">全部影片</h3>
+        </div>
+        <div class="page-size-control">
+          <span>每页</span>
+          <select id="pageSize">
+            <option value="24">24</option>
+            <option value="36" selected>36</option>
+            <option value="48">48</option>
+            <option value="72">72</option>
+          </select>
+        </div>
+      </section>
+
+      <section id="movieGrid" class="movie-grid view-gallery" aria-live="polite"></section>
+      <div id="emptyState" class="empty-state" hidden>
+        <div class="empty-symbol">⌁</div>
+        <h3>没有找到符合条件的影片</h3>
+        <p>尝试清除部分筛选，或等待其他来源补全资料。</p>
+        <button id="emptyClear">显示全部影片</button>
+      </div>
+
+      <footer class="pagination" id="pagination">
+        <button id="prevPage">← 上一页</button>
+        <div id="pageNumbers" class="page-numbers"></div>
+        <button id="nextPage">下一页 →</button>
+      </footer>
+    </main><div id="sourceOverlay" class="overlay" hidden><article class="detail-panel source-panel" role="dialog" aria-modal="true" aria-labelledby="sourcesTitle"><button id="closeSources" class="close-button" aria-label="关闭来源管理">×</button><div id="sourceContent"></div></article></div>
+  </div>
+
+  <div id="detailOverlay" class="overlay" hidden>
+    <article class="detail-panel" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
+      <button id="closeDetail" class="close-button" aria-label="关闭">×</button>
+      <div id="detailContent"></div>
+    </article>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/assets/app.js"></script>
+</body>
+</html>

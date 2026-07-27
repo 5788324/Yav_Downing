@@ -36,3 +36,22 @@ Yav.exe
 目录/_Yav资源库/
 
 Yav_修复版.exe
+
+# V2 本地业务数据和个人状态（运行时创建，不提交）
+*.db
+*.sqlite
+*.sqlite3
+data/
+covers/
+browser_profile/
+local_config.json
+.env
+*.log
+backups/
+exports/
+
+# 本地发布包与验收产物
+release/
+
+# 本地运行锁与关闭凭据
+runtime/

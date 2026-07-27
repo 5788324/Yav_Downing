@@ -1,63 +1,106 @@
-# Yav 私人影视资料馆
+# Yav 2.0
 
-Yav 是你的本地私人影视资料馆：先建立完整影片与封面目录，再从 JavDB、JPHOO 和未来新增的公开资源站补充磁力版本。它不包含下载器，也不会自动下载任何内容。
+Yav 是一个仅在本机运行的个人影片磁链资料馆，用于收集、整理和浏览 JavDB、JPHOO 等来源中的影片资料与磁链。
 
-## 核心思路
+> Yav 不包含下载器、播放器、云同步或账号系统，也不会自动下载影片。
 
-- **资料优先**：影片即使没有磁力，也会进入资料馆并等待后续补全。
-- **个人本地库**：SQLite 保存影片、演员、系列、发行商、发行日期、封面、收藏和磁力历史。
-- **封面浏览**：打开程序后会优先显示“私人资料馆”；封面保存在本地，可按标题、演员、系列、发行商、站点、收藏和磁力状态筛选。
-- **手动优先**：你修正的标题、演员、系列、发行商、日期和封面不会被后续自动抓取覆盖。
-- **资源站可扩展**：JavDB/JPHOO 只是一开始的资料与磁力来源；未来可增加其它站点解析器，而无需改变资料库结构。
+## 主要能力
 
-> 本项目只整理网页中已公开的信息。请自行遵守网站条款与所在地法律。
+- SQLite 是唯一业务数据源。
+- 海报墙、收藏架、资料册三种视图。
+- 按影片名、厂商、系列、女演员、来源、收藏和磁链状态筛选。
+- 同一影片可关联多个来源。
+- 磁链按 BTIH 去重，并保留多个来源页面。
+- 手工编辑的资料不会被后续扫描覆盖。
+- JavDB 与 JPHOO 支持扫描、停止和继续。
+- JPHOO 使用独立的系统 Edge Profile，可复用登录状态。
+- 支持 V1 只读迁移、数据备份和安全恢复。
+- 页面和命令行均可安全退出 Yav。
 
-## 本地文件结构
+## Windows 使用
+
+下载发布页中的：
 
 ```text
-目录\
-  各系列\
-    _全部磁力汇总表.csv        # 兼容导出、小表
-  _Yav资源库\
-    library.db                 # 私人资料馆主数据
-    covers\                    # 本地封面缩略图
-Yav_磁力台账.xlsx              # 分系列 Excel 导出
+Yav-V2.exe
+SHA256SUMS.txt
 ```
 
-`library.db` 是主资料库；CSV 与 Excel 继续保留，方便人工查看、备份或迁移。
+双击 `Yav-V2.exe` 后，Yav 会：
 
-## 使用方式
+1. 在 `127.0.0.1` 启动本地服务；
+2. 打开默认浏览器；
+3. 将业务数据保存到 `%LOCALAPPDATA%\Yav\v2`。
 
-1. 双击 [Yav.exe](Yav.exe)，或运行 `python -B scraper_app.py`。
-2. 在“打开私人资料馆”中浏览现有影片。
-3. 从系列筛选框选择一个系列，点击“补全当前系列资料与封面”。程序会逐部抓取公开的标题、演员、发行商、日期和封面；无封面的网址或下载失败会显示明确状态。
-4. 在 JavDB 或 JPHOO 标签选择系列，先执行“扫描新影片”建立影片资料；需要补充磁力时，再单独执行“检查磁力更新”。新影片和无磁力影片都会写入私人资料馆。
-5. 点击影片封面可查看详情、磁力历史，或手动修改资料并收藏。
-
-JPHOO 的一个磁力弹窗可能包含同日的其他影片：当前影片的多种清晰度会归为一个最佳版本；标题不同的同日影片会另建一条“弹窗附带资源”记录，避免遗漏资源。JPHOO 磁力补充需要用户先在专用 Edge 窗口登录，程序会复用该会话，不会为每部影片新开标签页。
-
-### 当前验证范围
-
-- 已验证：JPHOO 作品页可以自动点击“磁力下载链接”并读取登录态下的多条候选资源；资料扫描可在没有磁力时建立影片资料与封面记录。
-- 大型系列：JPHOO 的公开列表存在限流和分页中断风险。程序会保留已入库资料；如果列表扫描中断，可稍后重新扫描，已有来源网址不会重复建档。全量长系列建议分批执行，避免一次持续打开数千个作品页。
-
-## 添加来源
-
-在 JavDB 或 JPHOO 标签点击“添加网址”，填写站点、系列名称、系列网址和保存目录。真实配置在 `scraper_config.json`，登录态、数据库、封面和导出物均不会提交到 Git。
-
-## 开发与打包
+关闭浏览器不会退出 Yav。请使用页面中的 **安全退出 Yav**，或者执行：
 
 ```powershell
-cd "G:\Antigravity\javdb爬取"
-python -m pip install -r requirements.txt
-python -B scraper_app.py
-python -m PyInstaller --noconfirm --clean scraper_app.spec
+Yav-V2.exe --shutdown
 ```
 
-打包结果会复制到项目根目录的 `Yav.exe`。关闭窗口时会等待当前任务停止、关闭 JPHOO 浏览器上下文，再退出进程。
+### 常用命令
 
-## 文档
+```powershell
+# 指定数据目录
+Yav-V2.exe --data-dir "D:\YavData"
 
-- [资料库设计与迁移说明](docs/LIBRARY.md)
-- [JPHOO 弹窗与接口研究](docs/MAGNET_MODAL_FLOW.md)
-- [代码与功能链路审查](docs/CODE_REVIEW.md)
+# 不自动打开浏览器
+Yav-V2.exe --no-browser
+
+# 创建备份
+Yav-V2.exe --backup
+
+# 恢复演练
+Yav-V2.exe --restore "备份目录" --dry-run
+
+# 正式恢复
+Yav-V2.exe --restore "备份目录"
+
+# V1 迁移演练
+Yav-V2.exe --migrate-v1 "旧版 library.db" --dry-run
+
+# 正式迁移
+Yav-V2.exe --migrate-v1 "旧版 library.db"
+```
+
+详细说明：
+
+- [Windows 安装](docs/INSTALL_WINDOWS.md)
+- [V1 迁移](docs/MIGRATE_V1_TO_V2.md)
+- [备份与恢复](docs/BACKUP_RESTORE.md)
+- [发布说明](docs/RELEASE_NOTES_2.0.0.md)
+
+## 开发与测试
+
+```powershell
+python -m pip install requests beautifulsoup4 lxml playwright pyinstaller
+python -m compileall backend tests yav_v2.py
+python -m unittest discover -s tests -v
+node --check backend/static/app.js
+python -m PyInstaller --noconfirm --clean yav_v2.spec
+```
+
+开发模式：
+
+```powershell
+python -m backend.app
+```
+
+默认地址：`http://127.0.0.1:8765`
+
+## 分支
+
+- `main`：Yav 2.x 正式主分支。
+- `v1-frozen`：V1 冻结基线。
+- `v2-rebuild`：V2 重建历史分支；2.0.0 发布后不再作为日常主分支。
+
+## 数据边界
+
+不会提交或打包：
+
+- `library.db`
+- 浏览器 Profile、Cookie 和登录凭据
+- 本地封面
+- 日志
+- 运行锁和关闭令牌
+- 备份目录
