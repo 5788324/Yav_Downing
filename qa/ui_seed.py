@@ -43,7 +43,6 @@ def main() -> None:
         cast = [] if number % 7 == 0 else [actresses[number % len(actresses)]]
         if number % 9 == 0:
             cast.append(actresses[(number + 2) % len(actresses)])
-        cover_url = "https://invalid.example.test/missing-poster.jpg" if number == 2 else ""
         release_date = f"202{number % 6}-{(number % 12) + 1:02d}-{(number % 27) + 1:02d}"
         source = "JavDB" if number % 2 else "JPHOO"
         source_url = f"https://example.test/{source.lower()}/{number}"
@@ -53,7 +52,7 @@ def main() -> None:
             series=series,
             release_date=release_date,
             duration_minutes=80 + number,
-            cover_url=cover_url,
+            cover_url="",
             actresses=cast,
             source=source,
             source_url=source_url,
