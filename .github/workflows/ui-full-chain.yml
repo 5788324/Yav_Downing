@@ -83,6 +83,11 @@ jobs:
                   "  await newJavdbCard.getByRole('button', { name: '编辑' }).click();\n  await expect(javdbForm.locator('[data-form-title]')).toContainText('编辑 UI 新增 JavDB');\n  await javdbForm.locator('[name=\"name\"]').fill('UI 已编辑 JavDB');",
                   'second edit readiness target',
               ),
+              (
+                  "  page.on('console', message => {\n    if (message.type() === 'error') runtimeErrors.push({ type: 'console', text: message.text() });\n  });",
+                  "  page.on('console', message => {\n    if (message.type() === 'error' && !shuttingDown) runtimeErrors.push({ type: 'console', text: message.text() });\n  });",
+                  'shutdown console filter target',
+              ),
           ]
           for old, new, label in replacements:
               if old not in text:
