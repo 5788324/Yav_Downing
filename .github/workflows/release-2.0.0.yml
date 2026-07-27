@@ -1,0 +1,193 @@
+name: Release Yav 2.0.0
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-yav-2.0.0
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Check release state
+        id: release_state
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = python -c "from backend.runtime import APP_VERSION; print(APP_VERSION)"
+          if ($version -ne '2.0.0') {
+            throw "Expected APP_VERSION 2.0.0, got $version"
+          }
+          gh release view v2.0.0 --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            'exists=true' >> $env:GITHUB_OUTPUT
+          }
+          else {
+            'exists=false' >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Install dependencies
+        if: steps.release_state.outputs.exists != 'true'
+        run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml playwright pyinstaller
+
+      - name: Run release tests
+        if: steps.release_state.outputs.exists != 'true'
+        run: |
+          python -m compileall backend tests yav_v2.py
+          python -m unittest discover -s tests -v
+          node --check backend/static/app.js
+          git diff --check
+
+      - name: Build Windows executable
+        if: steps.release_state.outputs.exists != 'true'
+        run: python -m PyInstaller --noconfirm --clean yav_v2.spec
+
+      - name: Smoke-test packaged executable
+        if: steps.release_state.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path 'dist\Yav-V2.exe').Path
+          $root = Join-Path $env:RUNNER_TEMP 'yav-v2-release-smoke'
+          $data = Join-Path $root 'data'
+          $site = Join-Path $root 'site'
+          $port = 18765
+          $sitePort = 18766
+          Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item $data, $site -ItemType Directory -Force | Out-Null
+          Set-Content (Join-Path $site 'index.html') '<html><body>Yav Edge release smoke</body></html>'
+
+          function Start-Yav([string[]]$Arguments, [bool]$CleanEnvironment = $false) {
+            $psi = [Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName = $exe
+            foreach ($argument in $Arguments) { [void]$psi.ArgumentList.Add($argument) }
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            if ($CleanEnvironment) {
+              $psi.Environment.Clear()
+              $psi.Environment['PATH'] = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\Wbem;$env:ProgramFiles\Microsoft\Edge\Application"
+              foreach ($name in @('SYSTEMROOT','WINDIR','COMSPEC','TEMP','TMP','USERPROFILE','LOCALAPPDATA','APPDATA','PROGRAMDATA','PROGRAMFILES','HOMEDRIVE','HOMEPATH')) {
+                $value = [Environment]::GetEnvironmentVariable($name)
+                if ($value) { $psi.Environment[$name] = $value }
+              }
+              $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+              if ($programFilesX86) { $psi.Environment['ProgramFiles(x86)'] = $programFilesX86 }
+            }
+            $process = [Diagnostics.Process]::new()
+            $process.StartInfo = $psi
+            if (-not $process.Start()) { throw 'Unable to start Yav-V2.exe' }
+            return $process
+          }
+
+          function Wait-Yav([int]$ExpectedPort = $port) {
+            $deadline = [DateTime]::UtcNow.AddSeconds(45)
+            do {
+              try {
+                $status = Invoke-RestMethod "http://127.0.0.1:$ExpectedPort/api/app/status" -TimeoutSec 2
+                if ($status.app -eq 'Yav') { return $status }
+              }
+              catch {}
+              Start-Sleep -Milliseconds 250
+            } while ([DateTime]::UtcNow -lt $deadline)
+            throw 'Yav readiness timeout'
+          }
+
+          $server = $null
+          $http = Start-Process python -ArgumentList @('-m','http.server',"$sitePort",'--bind','127.0.0.1','--directory',$site) -PassThru -WindowStyle Hidden
+          try {
+            $server = Start-Yav @('--data-dir',$data,'--port',"$port",'--no-browser') $true
+            $status = Wait-Yav
+            if ($status.version -ne '2.0.0') { throw "Wrong packaged version: $($status.version)" }
+            Invoke-RestMethod "http://127.0.0.1:$port/api/filters" | Out-Null
+
+            $listeners = @(Get-NetTCPConnection -LocalPort $port -State Listen)
+            if ($listeners.Count -ne 1 -or $listeners[0].LocalAddress -ne '127.0.0.1') {
+              throw 'Yav is not listening exclusively on 127.0.0.1'
+            }
+
+            $series = Invoke-RestMethod -Method Post "http://127.0.0.1:$port/api/sources/jphoo" -ContentType 'application/json' -Body (@{name='Release smoke';url="http://127.0.0.1:$sitePort/";enabled=$true}|ConvertTo-Json)
+            Invoke-RestMethod -Method Post "http://127.0.0.1:$port/api/sources/jphoo/login/open" -ContentType 'application/json' -Body (@{series_id=$series.id}|ConvertTo-Json) | Out-Null
+            $deadline = [DateTime]::UtcNow.AddSeconds(45)
+            do {
+              Start-Sleep -Milliseconds 500
+              $jphoo = Invoke-RestMethod "http://127.0.0.1:$port/api/sources/jphoo/login"
+            } while ($jphoo.status -notin @('window_open','ready','failed') -and [DateTime]::UtcNow -lt $deadline)
+            if ($jphoo.status -notin @('window_open','ready')) { throw "Packaged Edge failed: $($jphoo.message)" }
+
+            $profile = Join-Path $data 'browser-profile\jphoo'
+            $profilePattern = [regex]::Escape($profile)
+            $edgeCount = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'msedge.exe' -and $_.CommandLine -match $profilePattern }).Count
+            if ($edgeCount -lt 1) { throw 'Yav Edge process was not found' }
+
+            $shutdown = Start-Yav @('--data-dir',$data,'--shutdown') $false
+            if (-not $shutdown.WaitForExit(30000) -or $shutdown.ExitCode -ne 0) { throw 'CLI shutdown failed' }
+            if (-not $server.WaitForExit(30000)) { throw 'Yav server did not exit' }
+            Start-Sleep -Seconds 2
+
+            $client = [Net.Sockets.TcpClient]::new()
+            try {
+              $client.Connect('127.0.0.1',$port)
+              throw 'Yav port remains open after shutdown'
+            }
+            catch [Net.Sockets.SocketException] {}
+            finally { $client.Dispose() }
+
+            foreach ($relative in @('runtime\instance.json','runtime\shutdown.secret','runtime\instance.lock')) {
+              if (Test-Path (Join-Path $data $relative)) { throw "Runtime residue: $relative" }
+            }
+            $edgeAfter = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'msedge.exe' -and $_.CommandLine -match $profilePattern }).Count
+            if ($edgeAfter -ne 0) { throw 'Yav Edge remains after shutdown' }
+
+            $backup = Start-Yav @('--data-dir',$data,'--backup') $false
+            if (-not $backup.WaitForExit(60000) -or $backup.ExitCode -ne 0) { throw 'Packaged backup failed' }
+            $backupDir = Get-ChildItem (Join-Path $data 'backups') -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if (-not $backupDir) { throw 'Backup directory was not created' }
+            $manifest = Get-Content (Join-Path $backupDir.FullName 'manifest.json') -Raw | ConvertFrom-Json
+            if (@($manifest.files | Where-Object { $_.path -like 'runtime/*' }).Count -ne 0) { throw 'Backup contains runtime state' }
+          }
+          finally {
+            if ($server -and -not $server.HasExited) { $server.Kill($true) }
+            if ($http -and -not $http.HasExited) { Stop-Process -Id $http.Id -Force }
+          }
+
+      - name: Create checksums
+        if: steps.release_state.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash 'dist\Yav-V2.exe' -Algorithm SHA256).Hash
+          "$hash  Yav-V2.exe" | Set-Content 'dist\SHA256SUMS.txt' -Encoding ASCII
+          Get-Item 'dist\Yav-V2.exe' | Select-Object FullName,Length
+          Get-Content 'dist\SHA256SUMS.txt'
+
+      - name: Publish GitHub Release
+        if: steps.release_state.outputs.exists != 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v2.0.0 `
+            'dist\Yav-V2.exe' `
+            'dist\SHA256SUMS.txt' `
+            'docs\RELEASE_NOTES_2.0.0.md' `
+            --repo $env:GITHUB_REPOSITORY `
+            --target $env:GITHUB_SHA `
+            --title 'Yav 2.0.0' `
+            --notes-file 'docs\RELEASE_NOTES_2.0.0.md' `
+            --verify-tag
