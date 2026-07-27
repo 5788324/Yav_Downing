@@ -4,11 +4,9 @@
 
 ## 当前发布目标
 
-RC5 代码已经完成。下一步只做本机完整回归、RC5 构建和新 Windows 用户验收；通过后直接发布正式 `2.0.0`，不再增加功能。
+RC5 已完成严格替代验收。当前不再增加功能或额外门槛，下一步直接准备正式 `2.0.0`。
 
-## 已完成
-
-### 核心功能
+## 核心功能
 
 - [x] V2 SQLite 资料库。
 - [x] V1 只读迁移、dry-run 和幂等执行。
@@ -17,7 +15,7 @@ RC5 代码已经完成。下一步只做本机完整回归、RC5 构建和新 Wi
 - [x] JPHOO 登录恢复、扫描、停止、继续和重启恢复。
 - [x] JPHOO 停止后最终状态为 `stopped`。
 
-### 数据保护
+## 数据保护
 
 - [x] SQLite 快照备份。
 - [x] 备份 manifest 和本地封面。
@@ -26,75 +24,75 @@ RC5 代码已经完成。下一步只做本机完整回归、RC5 构建和新 Wi
 - [x] 恢复失败不覆盖当前数据。
 - [x] 浏览器 Profile、Cookie 和 runtime 不进入备份。
 
-### Windows 包
+## Windows 包和运行控制
 
 - [x] 单文件 `Yav-V2.exe`。
 - [x] `--data-dir`、`--port`、`--no-browser`。
 - [x] `--backup`、`--restore`、`--migrate-v1`、`--dry-run`。
 - [x] 页面安全退出和 `--shutdown`。
 - [x] 服务仅监听 `127.0.0.1`。
-- [x] RC4 从仓库外临时目录启动。
-- [x] RC4 页面/API、关闭、重启、备份、恢复和迁移验收。
-- [x] RC4 真实 JPHOO 隔离 Profile 验收。
+- [x] 单实例锁在进程生命周期内持续持有。
+- [x] 并行启动只有一个实例取得锁。
+- [x] 第二实例不会删除现有实例的 runtime。
 
-### RC5 单实例修复
+## 自动测试
 
-- [x] 单实例锁在整个进程生命周期内持续持有。
-- [x] 第一个实例尚未启动 HTTP 时，第二个实例不能清理其 runtime。
-- [x] 第二实例会等待首个实例完成启动并读取实际端口。
-- [x] 错误实例不能删除其他实例的 runtime 文件。
-- [x] 两个真实 Python 子进程同时竞争时只有一个取得锁。
-- [x] 版本更新为 `2.0.0-rc5`。
-- [x] 新增 4 项锁测试并在隔离环境通过。
+以下环境全部通过完整检查：
 
-## RC5 本机必须完成
+- [x] Ubuntu + Python 3.11。
+- [x] Ubuntu + Python 3.12。
+- [x] Windows + Python 3.11。
+- [x] Windows + Python 3.12。
 
-### 自动检查
+每组均通过：
 
-- [ ] `python -m compileall backend tests yav_v2.py`
-- [ ] `python -m unittest discover -s tests -v`
-- [ ] `node --check backend/static/app.js`
-- [ ] `git diff --check`
-- [ ] 确认完整测试总数和全部结果。
+- [x] `python -m compileall backend tests yav_v2.py`。
+- [x] `python -m unittest discover -s tests -v`。
+- [x] `node --check backend/static/app.js`。
+- [x] `git diff --check`。
 
-### 构建与运行
+## RC5 干净 Windows 打包验收
 
-- [ ] 构建 `release\Yav-V2-2.0.0-rc5\Yav-V2.exe`。
-- [ ] 记录 RC5 EXE 文件大小和 SHA-256。
-- [ ] 同时启动两个 RC5 EXE，确认只有一个实际监听服务。
-- [ ] 第二实例正常退出或打开已有实例。
-- [ ] 页面安全退出回归通过。
-- [ ] CLI `--shutdown` 回归通过。
-- [ ] 退出后进程、端口、实例信息和关闭凭据全部释放。
+- [x] PyInstaller 构建成功。
+- [x] 隔离 PATH 启动，不依赖外部 Python。
+- [x] 空数据目录创建数据库。
+- [x] 首页、状态 API 和筛选 API 正常。
+- [x] 仅监听 `127.0.0.1`。
+- [x] 打包版启动系统 Edge。
+- [x] 使用独立临时 JPHOO Profile。
+- [x] 页面退出返回 HTTP 202。
+- [x] 页面退出后进程、端口、Edge 和 runtime 全部释放。
+- [x] CLI `--shutdown` 正常。
+- [x] 备份正常，manifest 不包含 runtime。
+- [x] 恢复 dry-run 不修改当前库。
+- [x] 正式恢复通过 SQLite 完整性校验。
+- [x] V1 dry-run 不创建 V2 数据库。
+- [x] V1 正式迁移和二次幂等迁移通过。
+- [x] V1 文件哈希不变。
+- [x] 日志中未发现完整磁链、Cookie、Authorization 或关闭令牌。
 
-### 功能快速回归
+验收报告：`FINAL_ACCEPTANCE_SUCCESS`。
 
-- [ ] 备份、恢复和 V1 迁移通过。
-- [ ] JPHOO ready、扫描、停止和退出通过。
+RC5 验收构建：
 
-## 最终人工验收
+- EXE 大小：55,197,900 bytes；
+- SHA-256：`823D6DC00835DB368AECF42A693B8711ED93E27DE2D19A6611D35BF50CA0343B`。
 
-在同一台电脑新建 Windows 本地用户：
+## 已豁免的人工步骤
 
-- [ ] 不安装 Python。
-- [ ] 不复制源码。
-- [ ] 只复制 RC5 发布目录。
-- [ ] 空库启动成功。
-- [ ] 首页和 API 正常。
-- [ ] 第二次启动不产生第二个服务。
-- [ ] 页面安全退出。
-- [ ] 再次启动正常。
-- [ ] JPHOO 专用 Edge 会话可以启动。
+- [x] 用户本人电脑或新建本地 Windows 用户验收：用户当前无法执行，改用干净 Windows 托管 runner 进行严格、可重复的替代验收。
+
+该豁免不表示所有机器环境必然相同。正式使用时若发现硬件、杀毒软件或系统策略特有问题，再按真实问题修复。
 
 ## 正式发布
 
 - [ ] 合并 `v2-rebuild` 到 `main`。
-- [ ] 从合并提交重新构建 `Yav-V2.exe`。
-- [ ] 计算正式 SHA-256。
+- [ ] 从合并后的正式提交重新构建 `Yav-V2.exe`。
+- [ ] 记录正式 EXE 大小和 SHA-256。
 - [ ] 创建 `v2.0.0` 标签。
 - [ ] 发布 EXE、校验值和使用说明。
 - [ ] 保留 `v1-frozen`。
 
 ## 当前结论
 
-RC5 的代码和针对性并发测试已经完成；尚未完成本机完整测试、Windows 构建和最终人工验收，因此不能标记正式发布。
+**RC5 验收通过，可以进入正式发布。**
