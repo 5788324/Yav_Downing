@@ -16,6 +16,11 @@
       if (text) button.setAttribute('aria-label', text);
     });
 
+    root.querySelectorAll?.('.poster-button[data-open]').forEach(button => {
+      const title = button.querySelector('.card-title')?.textContent?.trim();
+      if (title) button.setAttribute('aria-label', `打开《${title}》详情`);
+    });
+
     root.querySelectorAll?.('[data-source-form]').forEach(form => {
       const source = form.dataset.sourceForm === 'jphoo' ? 'JPHOO' : 'JavDB';
       const name = form.querySelector('input[name="name"]');
@@ -29,5 +34,9 @@
   const sourceContent = document.getElementById('sourceContent');
   if (sourceContent) {
     new MutationObserver(() => applyLabels(sourceContent)).observe(sourceContent, { childList: true, subtree: true });
+  }
+  const movieGrid = document.getElementById('movieGrid');
+  if (movieGrid) {
+    new MutationObserver(() => applyLabels(movieGrid)).observe(movieGrid, { childList: true, subtree: true });
   }
 })();
