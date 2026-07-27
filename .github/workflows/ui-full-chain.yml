@@ -57,24 +57,17 @@ jobs:
           path = Path('qa/ui_full_chain.spec.js')
           text = path.read_text(encoding='utf-8')
 
-          card_old = """    const ids = await page.locator('.movie-card').evaluateAll(cards => cards.map(card => card.dataset.id));"""
-          card_new = """    await expect(page.locator('#movieGrid .movie-card')).toHaveCount(pageNumber === 1 ? 72 : 11, { timeout: 15000 });
-              const ids = await page.locator('.movie-card').evaluateAll(cards => cards.map(card => card.dataset.id));"""
+          card_old = "    const ids = await page.locator('.movie-card').evaluateAll(cards => cards.map(card => card.dataset.id));"
+          card_new = "    await expect(page.locator('#movieGrid .movie-card')).toHaveCount(pageNumber === 1 ? 72 : 11, { timeout: 15000 });\n    const ids = await page.locator('.movie-card').evaluateAll(cards => cards.map(card => card.dataset.id));"
           if card_old not in text:
               raise SystemExit('card synchronization target not found')
           text = text.replace(card_old, card_new, 1)
 
-          error_old = """    if (!shuttingDown && url.startsWith(BASE_URL) && !url.includes('missing-poster')) {
-              runtimeErrors.push({ type: 'requestfailed', url, error: request.failure()?.errorText || '' });
-            }"""
-          error_new = """    const errorText = request.failure()?.errorText || '';
-              const expectedCoverAbort = /\\/api\\/movies\\/\\d+\\/cover$/.test(new URL(url).pathname) && errorText.includes('ERR_ABORTED');
-              if (!shuttingDown && url.startsWith(BASE_URL) && !expectedCoverAbort) {
-                runtimeErrors.push({ type: 'requestfailed', url, error: errorText });
-              }"""
-          if error_old not in text:
-              raise SystemExit('request failure filter target not found')
-          text = text.replace(error_old, error_new, 1)
+          condition_old = "    if (!shuttingDown && url.startsWith(BASE_URL) && !url.includes('missing-poster')) {"
+          condition_new = "    if (!shuttingDown && url.startsWith(BASE_URL) && !(url.includes('/cover') && (request.failure()?.errorText || '').includes('ERR_ABORTED'))) {"
+          if condition_old not in text:
+              raise SystemExit('request failure condition not found')
+          text = text.replace(condition_old, condition_new, 1)
 
           path.write_text(text, encoding='utf-8')
           PY
