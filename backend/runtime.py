@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
-APP_VERSION = "2.0.0-rc4"
+APP_VERSION = "2.0.0-rc5"
 
 
 def default_data_dir() -> Path:
@@ -127,7 +127,19 @@ def read_runtime_state(data_dir: str | Path) -> tuple[dict | None, str | None]:
         return None, None
 
 
-def clear_runtime_state(data_dir: str | Path) -> None:
+def clear_runtime_state(data_dir: str | Path, expected_instance_id: str | None = None) -> bool:
+    """删除临时实例信息；指定实例 ID 时不会误删其他实例的状态。"""
+    if expected_instance_id is not None:
+        try:
+            payload = json.loads(instance_path(data_dir).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            payload = None
+        except (OSError, ValueError, json.JSONDecodeError):
+            payload = None
+        if isinstance(payload, dict):
+            current_id = str(payload.get("instance_id", ""))
+            if current_id and current_id != str(expected_instance_id):
+                return False
     for path in (secret_path(data_dir), instance_path(data_dir)):
         path.unlink(missing_ok=True)
     directory = runtime_dir(data_dir)
@@ -135,6 +147,7 @@ def clear_runtime_state(data_dir: str | Path) -> None:
         directory.rmdir()
     except OSError:
         pass
+    return True
 
 
 def _is_expected_yav(port: int, instance_id: str) -> bool:
@@ -146,8 +159,40 @@ def _is_expected_yav(port: int, instance_id: str) -> bool:
         return False
 
 
+def _try_lock_file(handle) -> bool:
+    """非阻塞取得进程生命周期文件锁；成功后必须保持 handle 打开。"""
+    if os.name == "nt":
+        import msvcrt
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"0")
+            handle.flush()
+        handle.seek(0)
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+    import fcntl
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def _unlock_file(handle) -> None:
+    if os.name == "nt":
+        import msvcrt
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    import fcntl
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 class InstanceLock:
-    """数据目录级单实例锁；只认同端口上的同一 Yav 实例，避免 PID 复用误判。"""
+    """数据目录级单实例锁；锁句柄在整个 Yav 生命周期内保持打开。"""
 
     def __init__(self, data_dir: str | Path, port: int):
         self.data_dir = Path(data_dir).expanduser().resolve()
@@ -156,53 +201,53 @@ class InstanceLock:
         self.port = int(port)
         self.instance_id = secrets.token_urlsafe(12)
         self.acquired = False
+        self._lock_handle = None
 
     def acquire(self) -> bool:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        # 用独占哨兵解决两个启动器同时观察到旧状态的竞争；JSON 仍通过原子替换写入。
-        for attempt in range(2):
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                descriptor = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                    handle.write(str(os.getpid()))
-                break
-            except FileExistsError:
-                try:
-                    payload = json.loads(self.path.read_text(encoding="utf-8"))
-                    old_port = int(payload.get("port", 0))
-                    old_id = str(payload.get("instance_id", ""))
-                    old_pid = int(payload.get("pid", 0))
-                    if pid_is_alive(old_pid) and old_id and _is_expected_yav(old_port, old_id):
-                        return False
-                except (OSError, ValueError, json.JSONDecodeError):
-                    pass
-                # 不是同一 Yav 的陈旧锁（包括 PID 复用）才可移除后重试。
-                self.lock_path.unlink(missing_ok=True)
-                clear_runtime_state(self.data_dir)
-        else:
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = self.lock_path.open("a+b")
+        if not _try_lock_file(handle):
+            handle.close()
             return False
-        write_runtime_state(self.data_dir, pid=os.getpid(), port=self.port, instance_id=self.instance_id)
+        try:
+            # 只有真正取得 OS 锁的进程才有权清理上次异常退出留下的状态。
+            clear_runtime_state(self.data_dir)
+            write_runtime_state(self.data_dir, pid=os.getpid(), port=self.port, instance_id=self.instance_id)
+        except Exception:
+            try:
+                _unlock_file(handle)
+            finally:
+                handle.close()
+            raise
+        self._lock_handle = handle
         self.acquired = True
         return True
 
     def release(self) -> None:
-        if self.acquired:
-            clear_runtime_state(self.data_dir)
-            self.lock_path.unlink(missing_ok=True)
-            try:
-                runtime_dir(self.data_dir).rmdir()
-            except OSError:
-                pass
-            self.acquired = False
+        if not self.acquired:
+            return
+        clear_runtime_state(self.data_dir, expected_instance_id=self.instance_id)
+        handle, self._lock_handle = self._lock_handle, None
+        try:
+            if handle is not None:
+                _unlock_file(handle)
+        finally:
+            if handle is not None:
+                handle.close()
+        # instance.lock 是无业务数据的锁载体，保留文件可避免释放瞬间的路径竞争。
+        self.acquired = False
 
 
-def open_existing_page(port: int) -> bool:
-    try:
-        with urlopen(f"http://127.0.0.1:{port}/api/app/status", timeout=0.6) as response:
-            return response.status == 200 and json.loads(response.read().decode("utf-8")).get("app") == "Yav"
-    except (OSError, ValueError, json.JSONDecodeError):
-        return False
+def open_existing_page(port: int, timeout: float = 0.6) -> bool:
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    while True:
+        try:
+            with urlopen(f"http://127.0.0.1:{port}/api/app/status", timeout=0.6) as response:
+                return response.status == 200 and json.loads(response.read().decode("utf-8")).get("app") == "Yav"
+        except (OSError, ValueError, json.JSONDecodeError):
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.1)
 
 
 def wait_for_exit(pid: int, port: int, timeout: float = 15.0) -> bool:
