@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
-APP_VERSION = "2.0.0-rc5"
+APP_VERSION = "2.0.0"
 
 
 def default_data_dir() -> Path:
