@@ -1,0 +1,169 @@
+name: RC5 final package acceptance
+
+on:
+  pull_request:
+    branches: ['ci/rc5-base']
+
+permissions:
+  contents: read
+
+jobs:
+  final-package:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -q requests beautifulsoup4 lxml playwright pyinstaller
+      - run: python -m PyInstaller --noconfirm --clean yav_v2.spec
+      - name: Final packaged acceptance
+        id: finalprobe
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference='Stop'
+          $report=Join-Path $env:RUNNER_TEMP 'rc5-final-report.txt'
+          $root=Join-Path $env:RUNNER_TEMP 'rc5-final'
+          $data=Join-Path $root 'data'
+          $migrationData=Join-Path $root 'migration-data'
+          $site=Join-Path $root 'site'
+          $exe=(Resolve-Path 'dist\Yav-V2.exe').Path
+          $port=18765;$sitePort=18766
+          Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item $data,$migrationData,$site -ItemType Directory -Force|Out-Null
+          Set-Content (Join-Path $site 'index.html') '<html><body>local JPHOO smoke</body></html>'
+          function Log([string]$text){$line="$(Get-Date -Format o) $text";Write-Host $line;Add-Content $report $line}
+          function Start-Yav([string[]]$arguments,[bool]$clean=$false){
+            $psi=[Diagnostics.ProcessStartInfo]::new();$psi.FileName=$exe
+            foreach($arg in $arguments){[void]$psi.ArgumentList.Add($arg)}
+            $psi.UseShellExecute=$false;$psi.CreateNoWindow=$true
+            if($clean){
+              $psi.Environment.Clear()
+              $psi.Environment['PATH']="$env:SystemRoot\System32;$env:SystemRoot;$env:ProgramFiles\Microsoft\Edge\Application"
+              foreach($name in @('SYSTEMROOT','WINDIR','COMSPEC','TEMP','TMP','USERPROFILE','LOCALAPPDATA','APPDATA','PROGRAMDATA','PROGRAMFILES','HOMEDRIVE','HOMEPATH')){$value=[Environment]::GetEnvironmentVariable($name);if($value){$psi.Environment[$name]=$value}}
+              $pf86=[Environment]::GetEnvironmentVariable('ProgramFiles(x86)');if($pf86){$psi.Environment['ProgramFiles(x86)']=$pf86}
+            }
+            $p=[Diagnostics.Process]::new();$p.StartInfo=$psi
+            if(-not $p.Start()){throw 'Process.Start returned false'}
+            return $p
+          }
+          function Wait-Yav(){
+            $deadline=[DateTime]::UtcNow.AddSeconds(45)
+            do{try{$s=Invoke-RestMethod "http://127.0.0.1:$port/api/app/status" -TimeoutSec 2;if($s.app -eq 'Yav'){return $s}}catch{};Start-Sleep -Milliseconds 250}while([DateTime]::UtcNow -lt $deadline)
+            throw 'readiness timeout'
+          }
+          function Run-Yav([string[]]$arguments){
+            $p=Start-Yav $arguments $false
+            if(-not $p.WaitForExit(60000)){$p.Kill($true);throw "command timeout: $($arguments -join ' ')"}
+            if($p.ExitCode -ne 0){throw "command exit $($p.ExitCode): $($arguments -join ' ')"}
+          }
+          function Assert-Closed(){
+            try{$c=[Net.Sockets.TcpClient]::new();$c.Connect('127.0.0.1',$port);$c.Dispose();throw 'port still open'}catch [System.Net.Sockets.SocketException]{}
+          }
+
+          $server=$null;$http=$null;$stage='setup';$failed=$false
+          try{
+            $stage='local-site';Log "STAGE=$stage"
+            $http=Start-Process python -ArgumentList @('-m','http.server',"$sitePort",'--bind','127.0.0.1','--directory',$site) -PassThru -WindowStyle Hidden
+
+            $stage='clean-start';Log "STAGE=$stage"
+            $server=Start-Yav @('--data-dir',$data,'--port',"$port",'--no-browser') $true
+            $status=Wait-Yav
+            Log "READY version=$($status.version) pid=$($status.pid)"
+            if($status.version -ne '2.0.0-rc5'){throw "wrong version $($status.version)"}
+            Invoke-RestMethod "http://127.0.0.1:$port/api/filters"|Out-Null
+
+            $stage='edge-open';Log "STAGE=$stage"
+            $series=Invoke-RestMethod -Method Post "http://127.0.0.1:$port/api/sources/jphoo" -ContentType 'application/json' -Body (@{name='CI';url="http://127.0.0.1:$sitePort/";enabled=$true}|ConvertTo-Json)
+            Invoke-RestMethod -Method Post "http://127.0.0.1:$port/api/sources/jphoo/login/open" -ContentType 'application/json' -Body (@{series_id=$series.id}|ConvertTo-Json)|Out-Null
+            $deadline=[DateTime]::UtcNow.AddSeconds(45);$j=$null
+            do{Start-Sleep -Milliseconds 500;$j=Invoke-RestMethod "http://127.0.0.1:$port/api/sources/jphoo/login"}while($j.status -notin @('window_open','ready','failed') -and [DateTime]::UtcNow -lt $deadline)
+            Log "EDGE_STATUS=$($j.status) message=$($j.message)"
+            if($j.status -notin @('window_open','ready')){throw "Edge state $($j.status): $($j.message)"}
+            $profile=Join-Path $data 'browser-profile\jphoo';$pattern=[regex]::Escape($profile)
+            $edgeCount=@(Get-CimInstance Win32_Process|Where-Object{$_.Name -eq 'msedge.exe' -and $_.CommandLine -match $pattern}).Count
+            Log "EDGE_COUNT=$edgeCount";if($edgeCount -lt 1){throw 'profile Edge process not found'}
+
+            $stage='api-shutdown';Log "STAGE=$stage"
+            $pageHtml=(Invoke-WebRequest "http://127.0.0.1:$port/" -UseBasicParsing).Content
+            $match=[regex]::Match($pageHtml,'window\.__YAV_BOOTSTRAP__\s*=\s*(\{[^;]+\});');if(-not $match.Success){throw 'bootstrap missing'}
+            $bootstrap=$match.Groups[1].Value|ConvertFrom-Json
+            $shutdownResponse=Invoke-WebRequest -Method Post "http://127.0.0.1:$port/api/app/shutdown" -Headers @{Origin="http://127.0.0.1:$port"} -ContentType 'application/json' -Body (@{token=$bootstrap.shutdownToken;instance_id=$bootstrap.instanceId}|ConvertTo-Json) -UseBasicParsing
+            Log "SHUTDOWN_HTTP=$($shutdownResponse.StatusCode)"
+            if(-not $server.WaitForExit(45000)){throw 'API shutdown process timeout'}
+            Start-Sleep -Seconds 2;Assert-Closed
+            $residue=@('runtime\instance.json','runtime\shutdown.secret','runtime\instance.lock')|Where-Object{Test-Path (Join-Path $data $_)}
+            $edgeAfter=@(Get-CimInstance Win32_Process|Where-Object{$_.Name -eq 'msedge.exe' -and $_.CommandLine -match $pattern}).Count
+            Log "API_EXIT=$($server.ExitCode) RESIDUE=$($residue -join ',') EDGE_AFTER=$edgeAfter"
+            if($residue -or $edgeAfter){throw 'API shutdown residue'}
+
+            $stage='cli-shutdown';Log "STAGE=$stage"
+            $server=Start-Yav @('--data-dir',$data,'--port',"$port",'--no-browser') $true
+            Wait-Yav|Out-Null
+            Run-Yav @('--data-dir',$data,'--shutdown')
+            if(-not $server.WaitForExit(30000)){throw 'CLI shutdown process timeout'}
+            Assert-Closed
+            Log "CLI_EXIT=$($server.ExitCode)"
+
+            $stage='backup-restore';Log "STAGE=$stage"
+            python -c "from backend.db import LibraryDatabase; from pathlib import Path; LibraryDatabase(Path(r'$data')/'library.db').add_or_update_movie('ACCEPT-A')"
+            Run-Yav @('--data-dir',$data,'--backup')
+            $backup=Get-ChildItem (Join-Path $data 'backups') -Directory|Sort-Object LastWriteTime -Descending|Select-Object -First 1
+            if(-not $backup){throw 'backup missing'}
+            $manifest=Get-Content (Join-Path $backup.FullName 'manifest.json') -Raw|ConvertFrom-Json
+            if(@($manifest.files.path)|Where-Object{$_ -like 'runtime/*'}){throw 'backup includes runtime'}
+            python -c "from backend.db import LibraryDatabase; from pathlib import Path; LibraryDatabase(Path(r'$data')/'library.db').add_or_update_movie('ACCEPT-B')"
+            Run-Yav @('--data-dir',$data,'--restore',$backup.FullName,'--dry-run')
+            python -c "import sqlite3;from pathlib import Path;p=Path(r'$data')/'library.db';c=sqlite3.connect(p);assert c.execute(\"select count(*) from movies where title='ACCEPT-B'\").fetchone()[0]==1;c.close()"
+            Run-Yav @('--data-dir',$data,'--restore',$backup.FullName)
+            python -c "import sqlite3;from pathlib import Path;p=Path(r'$data')/'library.db';c=sqlite3.connect(p);assert c.execute('pragma integrity_check').fetchone()[0]=='ok';assert c.execute(\"select count(*) from movies where title='ACCEPT-A'\").fetchone()[0]==1;assert c.execute(\"select count(*) from movies where title='ACCEPT-B'\").fetchone()[0]==0;c.close()"
+            Log "BACKUP=$($backup.FullName)"
+
+            $stage='v1-migration';Log "STAGE=$stage"
+            $v1=Join-Path $root 'v1.db';$script=Join-Path $root 'make_v1.py'
+            @'
+import sqlite3,sys
+p=sys.argv[1];d=sqlite3.connect(p)
+d.executescript("""CREATE TABLE works(id INTEGER PRIMARY KEY,title_manual TEXT,title_auto TEXT,code_manual TEXT,code_auto TEXT,publisher_manual TEXT,publisher_auto TEXT,series TEXT,release_date_manual TEXT,release_date_auto TEXT,cover_url_manual TEXT,cover_url_auto TEXT,favorite INTEGER,site TEXT,source_url TEXT);CREATE TABLE actors(id INTEGER PRIMARY KEY,name TEXT);CREATE TABLE work_actors(work_id INTEGER,actor_id INTEGER);CREATE TABLE magnets(work_id INTEGER,magnet TEXT,source_site TEXT,size_gb REAL);""")
+d.execute("INSERT INTO works VALUES(1,'CI-001','','','','Studio','','Series','2024-01-01','','','',1,'JavDB','https://example.test/1')");d.execute("INSERT INTO actors VALUES(1,'演员甲')");d.execute('INSERT INTO work_actors VALUES(1,1)');d.execute("INSERT INTO magnets VALUES(1,'magnet:?xt=urn:btih:ABC123','JavDB',1.5)");d.commit();d.close()
+'@|Set-Content $script -Encoding UTF8
+            python $script $v1;$v1Hash=(Get-FileHash $v1 -Algorithm SHA256).Hash
+            Run-Yav @('--data-dir',$migrationData,'--migrate-v1',$v1,'--dry-run')
+            if(Test-Path (Join-Path $migrationData 'library.db')){throw 'dry-run created database'}
+            Run-Yav @('--data-dir',$migrationData,'--migrate-v1',$v1);Run-Yav @('--data-dir',$migrationData,'--migrate-v1',$v1)
+            python -c "import sqlite3;from pathlib import Path;p=Path(r'$migrationData')/'library.db';c=sqlite3.connect(p);assert c.execute('pragma integrity_check').fetchone()[0]=='ok';assert c.execute('select count(*) from movies').fetchone()[0]==1;assert c.execute('select count(*) from magnets').fetchone()[0]==1;assert c.execute('select count(*) from magnet_sources').fetchone()[0]==1;c.close()"
+            if((Get-FileHash $v1 -Algorithm SHA256).Hash -ne $v1Hash){throw 'V1 modified'}
+            Log 'FINAL_ACCEPTANCE_SUCCESS'
+          }catch{
+            $failed=$true;Log "FINAL_ACCEPTANCE_FAILURE stage=$stage type=$($_.Exception.GetType().FullName) message=$($_.Exception.Message)"
+            Add-Content $report ($_|Format-List * -Force|Out-String)
+            $log=Join-Path $data 'logs\yav.log';if(Test-Path $log){Add-Content $report '--- YAV LOG ---';Get-Content $log|Add-Content $report}
+          }finally{
+            if($server -and -not $server.HasExited){$server.Kill($true)}
+            if($http -and -not $http.HasExited){Stop-Process -Id $http.Id -Force}
+          }
+          if($failed){exit 1}
+      - name: Checksum
+        if: always()
+        shell: pwsh
+        run: |
+          $hash=(Get-FileHash 'dist\Yav-V2.exe' -Algorithm SHA256).Hash
+          "$hash  Yav-V2.exe"|Set-Content 'dist\SHA256SUMS.txt' -Encoding ASCII
+          Get-Item 'dist\Yav-V2.exe'|Select-Object Length
+          Get-Content 'dist\SHA256SUMS.txt'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rc5-final-package
+          path: |
+            dist/Yav-V2.exe
+            dist/SHA256SUMS.txt
+            ${{ runner.temp }}/rc5-final-report.txt
+            ${{ runner.temp }}/rc5-final/data/logs/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Enforce acceptance
+        if: steps.finalprobe.outcome == 'failure'
+        run: exit 1
