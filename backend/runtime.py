@@ -234,7 +234,13 @@ class InstanceLock:
         finally:
             if handle is not None:
                 handle.close()
-        # instance.lock 是无业务数据的锁载体，保留文件可避免释放瞬间的路径竞争。
+        # Windows 关闭句柄后可安全清理锁载体；若新实例已打开它，删除会失败并保留文件。
+        if os.name == "nt":
+            try:
+                self.lock_path.unlink(missing_ok=True)
+                runtime_dir(self.data_dir).rmdir()
+            except OSError:
+                pass
         self.acquired = False
 
 
