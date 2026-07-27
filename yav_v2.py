@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 import webbrowser
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -69,7 +70,7 @@ def _run_command(args, logger) -> int:
                 if response.status != 202:
                     raise RuntimeError("关闭请求未接受")
             if wait_for_exit(pid, port, timeout=20):
-                clear_runtime_state(data_dir)
+                clear_runtime_state(data_dir, expected_instance_id=instance_id)
                 print(json.dumps({"status": "stopped", "port": port}, ensure_ascii=False))
                 return 0
             print(json.dumps({"status": "shutting_down", "port": port}, ensure_ascii=False))
@@ -81,7 +82,8 @@ def _run_command(args, logger) -> int:
             except (TypeError, ValueError):
                 stale = True
             if stale:
-                clear_runtime_state(data_dir)
+                expected = str(info.get("instance_id", "")).strip() or None
+                clear_runtime_state(data_dir, expected_instance_id=expected)
             logger.info("安全退出未执行：%s", safe_text(exc))
             print(json.dumps({"status": "not_running"}, ensure_ascii=False))
             return 0
@@ -111,6 +113,23 @@ def _run_command(args, logger) -> int:
     return -1
 
 
+def _wait_for_existing_instance(data_dir: Path, fallback_port: int, timeout: float = 5.0) -> tuple[int, bool]:
+    """等待同一资料库的首个实例完成启动，不删除其运行状态。"""
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    port = int(fallback_port)
+    while True:
+        try:
+            payload = json.loads((data_dir / "runtime" / "instance.json").read_text(encoding="utf-8"))
+            port = int(payload.get("port", port))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            pass
+        if open_existing_page(port, timeout=0.2):
+            return port, True
+        if time.monotonic() >= deadline:
+            return port, False
+        time.sleep(0.1)
+
+
 def run(argv=None) -> int:
     args = parse_args(argv)
     data_dir = args.data_dir.expanduser().resolve()
@@ -123,14 +142,11 @@ def run(argv=None) -> int:
         port = choose_port(args.port)
         lock = InstanceLock(data_dir, port)
         if not lock.acquire():
-            existing_port = port
-            try:
-                existing_port = int(json.loads(lock.path.read_text(encoding="utf-8")).get("port", port))
-            except Exception:
-                pass
-            if open_existing_page(existing_port) and not args.no_browser:
+            existing_port, ready = _wait_for_existing_instance(data_dir, port)
+            if ready and not args.no_browser:
                 webbrowser.open(f"http://127.0.0.1:{existing_port}")
-            _message("Yav 已在运行，已保留现有资料库。", "Yav 已在运行")
+            _message("Yav 已在运行，已打开现有资料库。" if ready else "Yav 正在启动，请稍后重新打开。",
+                     "Yav 已在运行" if ready else "Yav 正在启动")
             return 0
         try:
             sys.argv = [sys.argv[0], "--data-dir", str(data_dir), "--port", str(port), "--instance-id", lock.instance_id]
