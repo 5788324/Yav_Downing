@@ -62,8 +62,27 @@
     };
   }
 
+  function fixCancelEdit() {
+    const content = document.getElementById('sourceContent');
+    if (!content) return;
+    content.addEventListener('click', event => {
+      const button = event.target.closest('button[data-cancel-edit]');
+      if (!button) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const form = button.closest('form');
+      if (!form) return;
+      form.reset();
+      delete form.dataset.editId;
+      button.hidden = true;
+      const label = form.dataset.sourceForm === 'jphoo' ? 'JPHOO' : 'JavDB';
+      form.querySelector('[data-form-title]').textContent = `添加 ${label} 系列`;
+    }, true);
+  }
+
   normalizeDialogElements();
   fixSourceRefresh();
+  fixCancelEdit();
   applyLabels();
   const sourceContent = document.getElementById('sourceContent');
   if (sourceContent) {
