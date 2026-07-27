@@ -52,6 +52,31 @@ jobs:
           }
           "exists=$($exists.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
 
+      - name: Verify existing release assets
+        if: steps.state.outputs.exists == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'yav-v2.0.1-verify'
+          New-Item $root -ItemType Directory -Force | Out-Null
+          gh release download v2.0.1 `
+            --repo $env:GITHUB_REPOSITORY `
+            --pattern 'Yav-V2.exe' `
+            --pattern 'SHA256SUMS.txt' `
+            --dir $root `
+            --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Release asset download failed' }
+          $exe = Join-Path $root 'Yav-V2.exe'
+          $sums = Join-Path $root 'SHA256SUMS.txt'
+          $expected = ((Get-Content $sums -Raw).Trim() -split '\s+')[0].ToUpperInvariant()
+          $actual = (Get-FileHash $exe -Algorithm SHA256).Hash.ToUpperInvariant()
+          $size = (Get-Item $exe).Length
+          if ($actual -ne $expected) { throw "Checksum mismatch: expected $expected actual $actual" }
+          Write-Host "OFFICIAL_SIZE=$size"
+          Write-Host "OFFICIAL_SHA256=$actual"
+          "## Yav 2.0.1 official assets`n- Size: $size bytes`n- SHA-256: $actual" >> $env:GITHUB_STEP_SUMMARY
+
       - name: Install dependencies
         if: steps.state.outputs.exists != 'true'
         run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml playwright pyinstaller
