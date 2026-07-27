@@ -1,0 +1,103 @@
+name: Yav UI patch regression
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    if: github.head_ref == 'qa/ui-full-chain-2.0.0'
+    name: Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml playwright pyinstaller
+      - name: Compile Python
+        run: python -m compileall backend tests yav_v2.py qa
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Check JavaScript syntax
+        run: |
+          node --check backend/static/app.js
+          node --check backend/static/accessibility.js
+          node --check qa/ui_full_chain.spec.js
+      - name: Check whitespace
+        run: git diff --check
+
+  windows-package:
+    if: github.head_ref == 'qa/ui-full-chain-2.0.0'
+    needs: tests
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install build dependencies
+        run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml playwright pyinstaller
+      - name: Build executable
+        run: python -m PyInstaller --noconfirm --clean yav_v2.spec
+      - name: Start packaged Yav and verify patched assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path 'dist\Yav-V2.exe').Path
+          $data = Join-Path $env:RUNNER_TEMP 'yav-ui-patch-package'
+          $port = 18765
+          Remove-Item $data -Recurse -Force -ErrorAction SilentlyContinue
+
+          $process = Start-Process $exe -ArgumentList @('--data-dir', $data, '--port', "$port", '--no-browser') -PassThru
+          try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(45)
+            do {
+              try {
+                $status = Invoke-RestMethod "http://127.0.0.1:$port/api/app/status" -TimeoutSec 2
+                if ($status.app -eq 'Yav') { break }
+              } catch {}
+              Start-Sleep -Milliseconds 250
+            } while ([DateTime]::UtcNow -lt $deadline)
+            if (-not $status -or $status.app -ne 'Yav') { throw 'Packaged Yav did not become ready' }
+
+            $home = (Invoke-WebRequest "http://127.0.0.1:$port/" -UseBasicParsing).Content
+            if ($home -notmatch '/assets/accessibility.css' -or $home -notmatch '/assets/accessibility.js') {
+              throw 'Patched UI assets are not referenced by the packaged homepage'
+            }
+            foreach ($asset in @('accessibility.css', 'accessibility.js')) {
+              $response = Invoke-WebRequest "http://127.0.0.1:$port/assets/$asset" -UseBasicParsing
+              if ($response.StatusCode -ne 200 -or -not $response.Content) { throw "Missing packaged asset: $asset" }
+            }
+
+            $shutdown = Start-Process $exe -ArgumentList @('--data-dir', $data, '--shutdown') -PassThru -Wait
+            if ($shutdown.ExitCode -ne 0) { throw "CLI shutdown failed: $($shutdown.ExitCode)" }
+            if (-not $process.WaitForExit(30000)) { throw 'Packaged process did not exit' }
+            $client = [Net.Sockets.TcpClient]::new()
+            try {
+              $client.Connect('127.0.0.1', $port)
+              throw 'Port remained open after shutdown'
+            } catch [Net.Sockets.SocketException] {
+              # Expected.
+            } finally {
+              $client.Dispose()
+            }
+          } finally {
+            if ($process -and -not $process.HasExited) { $process.Kill($true) }
+          }
+      - name: Record package hash
+        shell: pwsh
+        run: |
+          Get-Item 'dist\Yav-V2.exe' | Select-Object FullName,Length
+          Get-FileHash 'dist\Yav-V2.exe' -Algorithm SHA256
