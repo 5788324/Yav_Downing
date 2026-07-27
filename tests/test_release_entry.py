@@ -27,26 +27,35 @@ class ReleaseEntryTests(unittest.TestCase):
                 self.assertEqual(yav_v2._run_command(args, logger), 0)
             self.assertTrue(migration.call_args.kwargs['apply'])
 
-    def test_stale_instance_lock_is_replaced(self):
+    def test_stale_instance_lock_is_reused(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             write_runtime_state(root, pid=99999999, port=8765, instance_id="stale", token="old")
             stale = root / 'runtime' / 'instance.lock'
-            stale.write_text('99999999', encoding='utf-8')
+            stale.write_text('0', encoding='utf-8')
             lock = InstanceLock(root, 8766)
             self.assertTrue(lock.acquire())
             self.assertEqual(lock.path.parent.name, 'runtime')
             lock.release()
 
-    def test_pid_reuse_without_matching_yav_is_not_treated_as_active(self):
+    def test_unlocked_file_does_not_depend_on_old_pid_or_http_identity(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             write_runtime_state(root, pid=1234, port=8765, instance_id="old", token="old")
-            (root / 'runtime' / 'instance.lock').write_text('1234', encoding='utf-8')
-            with patch('backend.runtime.pid_is_alive', return_value=True), patch('backend.runtime._is_expected_yav', return_value=False):
-                lock = InstanceLock(root, 8766)
-                self.assertTrue(lock.acquire())
-                lock.release()
+            (root / 'runtime' / 'instance.lock').write_text('0', encoding='utf-8')
+            lock = InstanceLock(root, 8766)
+            self.assertTrue(lock.acquire())
+            lock.release()
+
+    def test_wait_for_existing_instance_uses_runtime_port(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            write_runtime_state(root, pid=1234, port=8899, instance_id="running", token="token")
+            with patch('yav_v2.open_existing_page', side_effect=[False, True]) as probe, patch('yav_v2.time.sleep'):
+                port, ready = yav_v2._wait_for_existing_instance(root, 8765, timeout=1)
+            self.assertTrue(ready)
+            self.assertEqual(port, 8899)
+            self.assertEqual(probe.call_args_list[0].args[0], 8899)
 
 
 if __name__ == '__main__':
