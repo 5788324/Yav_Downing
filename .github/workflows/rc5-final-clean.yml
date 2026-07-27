@@ -20,7 +20,7 @@ jobs:
       - run: python -m PyInstaller --noconfirm --clean yav_v2.spec
       - name: Run strict packaged acceptance
         shell: pwsh
-        run: ./ci/rc5_package_acceptance.ps1 -ExePath ./dist/Yav-V2.exe
+        run: ./ci/rc5_package_acceptance_v2.ps1 -ExePath ./dist/Yav-V2.exe
       - name: Record checksum
         if: always()
         shell: pwsh
