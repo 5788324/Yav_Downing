@@ -55,14 +55,44 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $report = Join-Path $env:RUNNER_TEMP 'ui-patch-package-report.txt'
           $exe = (Resolve-Path 'dist\Yav-V2.exe').Path
           $data = Join-Path $env:RUNNER_TEMP 'yav-ui-patch-package'
           $port = 18765
-          Remove-Item $data -Recurse -Force -ErrorAction SilentlyContinue
+          $server = $null
 
-          $process = Start-Process $exe -ArgumentList @('--data-dir', $data, '--port', "$port", '--no-browser') -PassThru
+          function Report([string]$text) {
+            $line = "$(Get-Date -Format o) $text"
+            Write-Host $line
+            Add-Content $report $line
+          }
+          function Start-Yav([string[]]$arguments) {
+            $info = [Diagnostics.ProcessStartInfo]::new()
+            $info.FileName = $exe
+            foreach ($argument in $arguments) { [void]$info.ArgumentList.Add($argument) }
+            $info.UseShellExecute = $false
+            $info.CreateNoWindow = $true
+            $process = [Diagnostics.Process]::new()
+            $process.StartInfo = $info
+            if (-not $process.Start()) { throw 'Process.Start returned false' }
+            return $process
+          }
+          function Run-Yav([string[]]$arguments) {
+            $process = Start-Yav $arguments
+            if (-not $process.WaitForExit(60000)) {
+              $process.Kill($true)
+              throw "Yav command timeout: $($arguments -join ' ')"
+            }
+            if ($process.ExitCode -ne 0) { throw "Yav command exit $($process.ExitCode)" }
+          }
+
+          Remove-Item $data -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item $report -Force -ErrorAction SilentlyContinue
           try {
+            Report 'STAGE=start'
+            $server = Start-Yav @('--data-dir', $data, '--port', "$port", '--no-browser')
             $deadline = [DateTime]::UtcNow.AddSeconds(45)
+            $status = $null
             do {
               try {
                 $status = Invoke-RestMethod "http://127.0.0.1:$port/api/app/status" -TimeoutSec 2
@@ -71,7 +101,9 @@ jobs:
               Start-Sleep -Milliseconds 250
             } while ([DateTime]::UtcNow -lt $deadline)
             if (-not $status -or $status.app -ne 'Yav') { throw 'Packaged Yav did not become ready' }
+            Report "READY version=$($status.version) pid=$($status.pid)"
 
+            Report 'STAGE=assets'
             $home = (Invoke-WebRequest "http://127.0.0.1:$port/" -UseBasicParsing).Content
             if ($home -notmatch '/assets/accessibility.css' -or $home -notmatch '/assets/accessibility.js') {
               throw 'Patched UI assets are not referenced by the packaged homepage'
@@ -79,25 +111,48 @@ jobs:
             foreach ($asset in @('accessibility.css', 'accessibility.js')) {
               $response = Invoke-WebRequest "http://127.0.0.1:$port/assets/$asset" -UseBasicParsing
               if ($response.StatusCode -ne 200 -or -not $response.Content) { throw "Missing packaged asset: $asset" }
+              Report "ASSET=$asset bytes=$($response.RawContentLength)"
             }
 
-            $shutdown = Start-Process $exe -ArgumentList @('--data-dir', $data, '--shutdown') -PassThru -Wait
-            if ($shutdown.ExitCode -ne 0) { throw "CLI shutdown failed: $($shutdown.ExitCode)" }
-            if (-not $process.WaitForExit(30000)) { throw 'Packaged process did not exit' }
+            Report 'STAGE=shutdown'
+            Run-Yav @('--data-dir', $data, '--shutdown')
+            if (-not $server.WaitForExit(30000)) { throw 'Packaged service process did not exit' }
             $client = [Net.Sockets.TcpClient]::new()
             try {
               $client.Connect('127.0.0.1', $port)
               throw 'Port remained open after shutdown'
             } catch [Net.Sockets.SocketException] {
-              # Expected.
+              Report 'PORT_CLOSED=true'
             } finally {
               $client.Dispose()
             }
+            Report 'PACKAGE_UI_PATCH_SUCCESS'
+          } catch {
+            Report "FAILURE type=$($_.Exception.GetType().FullName) message=$($_.Exception.Message)"
+            $log = Join-Path $data 'logs\yav.log'
+            if (Test-Path $log) {
+              Add-Content $report '--- YAV LOG ---'
+              Get-Content $log | Add-Content $report
+            }
+            throw
           } finally {
-            if ($process -and -not $process.HasExited) { $process.Kill($true) }
+            if ($server -and -not $server.HasExited) { $server.Kill($true) }
           }
       - name: Record package hash
+        if: always()
         shell: pwsh
         run: |
-          Get-Item 'dist\Yav-V2.exe' | Select-Object FullName,Length
-          Get-FileHash 'dist\Yav-V2.exe' -Algorithm SHA256
+          if (Test-Path 'dist\Yav-V2.exe') {
+            Get-Item 'dist\Yav-V2.exe' | Select-Object FullName,Length
+            Get-FileHash 'dist\Yav-V2.exe' -Algorithm SHA256
+          }
+      - name: Upload package smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: yav-ui-patch-package-report
+          path: |
+            ${{ runner.temp }}/ui-patch-package-report.txt
+            ${{ runner.temp }}/yav-ui-patch-package/logs/
+          if-no-files-found: warn
+          retention-days: 7
