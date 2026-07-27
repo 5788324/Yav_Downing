@@ -6,6 +6,7 @@
   <meta name="theme-color" content="#11110f">
   <title>Yav · 私人影片图书馆</title>
   <link rel="stylesheet" href="/assets/styles.css">
+  <link rel="stylesheet" href="/assets/accessibility.css">
 </head>
 <body>
   <div class="app-shell">
@@ -19,20 +20,20 @@
       </div>
 
       <nav class="nav-stack" aria-label="快速筛选">
-        <button class="nav-item is-active" data-quick="all" aria-current="page">
+        <button class="nav-item is-active" data-quick="all" aria-current="page" aria-label="全部影片">
           <span class="nav-icon">▦</span><span>全部影片</span><strong id="navTotal">0</strong>
         </button>
-        <button class="nav-item" data-quick="favorite">
+        <button class="nav-item" data-quick="favorite" aria-label="我的收藏">
           <span class="nav-icon">♥</span><span>我的收藏</span><strong id="navFavorites">0</strong>
         </button>
-        <button class="nav-item" data-quick="with-magnets">
+        <button class="nav-item" data-quick="with-magnets" aria-label="已有磁链">
           <span class="nav-icon">⌁</span><span>已有磁链</span><strong id="navWithMagnets">0</strong>
         </button>
-        <button class="nav-item" data-quick="without-magnets">
+        <button class="nav-item" data-quick="without-magnets" aria-label="等待补全">
           <span class="nav-icon">○</span><span>等待补全</span><strong id="navWithoutMagnets">0</strong>
         </button>
         <div class="nav-divider" aria-hidden="true"></div>
-        <button class="nav-item" id="openSources" type="button">
+        <button class="nav-item" id="openSources" type="button" aria-label="来源管理">
           <span class="nav-icon">⌘</span><span>来源管理</span><strong>›</strong>
         </button>
       </nav>
@@ -83,7 +84,7 @@
       <section class="filter-panel">
         <label class="search-box">
           <span>⌕</span>
-          <input id="searchInput" type="search" placeholder="搜索影片名" autocomplete="off">
+          <input id="searchInput" type="search" placeholder="搜索影片名" autocomplete="off" aria-label="搜索影片名">
           <kbd>Enter</kbd>
         </label>
         <div class="filter-grid">
@@ -109,7 +110,7 @@
         </div>
         <div class="page-size-control">
           <span>每页</span>
-          <select id="pageSize">
+          <select id="pageSize" aria-label="每页显示数量">
             <option value="24">24</option>
             <option value="36" selected>36</option>
             <option value="48">48</option>
@@ -143,5 +144,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="/assets/app.js"></script>
+  <script src="/assets/accessibility.js"></script>
 </body>
 </html>
