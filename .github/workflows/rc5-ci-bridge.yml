@@ -1,0 +1,143 @@
+name: RC5 isolated acceptance
+
+on:
+  pull_request:
+    branches: ['ci/rc5-base']
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install requests beautifulsoup4 lxml playwright pyinstaller
+      - run: python -m compileall backend tests yav_v2.py
+      - run: python -m unittest discover -s tests -v
+      - run: node --check backend/static/app.js
+      - run: git diff --check
+
+  windows-exe:
+    name: Windows packaged end-to-end
+    runs-on: windows-latest
+    needs: tests
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install requests beautifulsoup4 lxml playwright pyinstaller
+      - run: python -m PyInstaller --noconfirm --clean yav_v2.spec
+      - name: Packaged smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $exe=(Resolve-Path 'dist\Yav-V2.exe').Path
+          $root=Join-Path $env:RUNNER_TEMP 'yav-rc5-ci'
+          $data=Join-Path $root 'data'
+          $site=Join-Path $root 'site'
+          $port=18765
+          $sitePort=18766
+          Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item $data,$site -ItemType Directory -Force | Out-Null
+          Set-Content (Join-Path $site 'index.html') '<html><body>local JPHOO smoke</body></html>'
+
+          function Start-Yav([string[]]$arguments,[bool]$clean=$false){
+            $psi=[Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName=$exe
+            foreach($arg in $arguments){[void]$psi.ArgumentList.Add($arg)}
+            $psi.UseShellExecute=$false
+            $psi.CreateNoWindow=$true
+            if($clean){
+              $psi.Environment.Clear()
+              $psi.Environment['PATH']="$env:SystemRoot\System32;$env:SystemRoot;$env:ProgramFiles\Microsoft\Edge\Application"
+              foreach($name in @('SYSTEMROOT','WINDIR','COMSPEC','TEMP','TMP','USERPROFILE','LOCALAPPDATA','APPDATA','PROGRAMDATA','PROGRAMFILES')){
+                $value=[Environment]::GetEnvironmentVariable($name)
+                if($value){$psi.Environment[$name]=$value}
+              }
+              $pf86=[Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+              if($pf86){$psi.Environment['ProgramFiles(x86)']=$pf86}
+            }
+            $p=[Diagnostics.Process]::new(); $p.StartInfo=$psi
+            if(-not $p.Start()){throw 'Yav start failed'}
+            return $p
+          }
+          function Wait-Yav([int]$p){
+            $deadline=[DateTime]::UtcNow.AddSeconds(45)
+            do{try{$s=Invoke-RestMethod "http://127.0.0.1:$p/api/app/status" -TimeoutSec 2;if($s.app -eq 'Yav'){return $s}}catch{};Start-Sleep -Milliseconds 250}while([DateTime]::UtcNow -lt $deadline)
+            throw 'Yav readiness timeout'
+          }
+          function Run-Yav([string[]]$arguments){
+            $p=Start-Yav $arguments $false
+            if(-not $p.WaitForExit(60000)){$p.Kill($true);throw 'Yav command timeout'}
+            if($p.ExitCode -ne 0){throw "Yav command exit $($p.ExitCode)"}
+          }
+
+          $http=Start-Process python -ArgumentList @('-m','http.server',"$sitePort",'--bind','127.0.0.1','--directory',$site) -PassThru -WindowStyle Hidden
+          try{
+            $server=Start-Yav @('--data-dir',$data,'--port',"$port",'--no-browser') $true
+            $status=Wait-Yav $port
+            if($status.version -ne '2.0.0-rc5'){throw "wrong version $($status.version)"}
+            Invoke-RestMethod "http://127.0.0.1:$port/api/filters" | Out-Null
+
+            $body=@{name='CI';url="http://127.0.0.1:$sitePort/";enabled=$true}|ConvertTo-Json
+            $series=Invoke-RestMethod -Method Post "http://127.0.0.1:$port/api/sources/jphoo" -ContentType 'application/json' -Body $body
+            Invoke-RestMethod -Method Post "http://127.0.0.1:$port/api/sources/jphoo/login/open" -ContentType 'application/json' -Body (@{series_id=$series.id}|ConvertTo-Json)|Out-Null
+            $deadline=[DateTime]::UtcNow.AddSeconds(45)
+            do{Start-Sleep -Milliseconds 500;$j=Invoke-RestMethod "http://127.0.0.1:$port/api/sources/jphoo/login"}while($j.status -notin @('window_open','ready','failed') -and [DateTime]::UtcNow -lt $deadline)
+            if($j.status -notin @('window_open','ready')){throw "Edge smoke failed: $($j.status) $($j.message)"}
+
+            $profile=Join-Path $data 'browser-profile\jphoo'
+            $pattern=[regex]::Escape($profile)
+            if(@(Get-CimInstance Win32_Process|Where-Object{$_.Name -eq 'msedge.exe' -and $_.CommandLine -match $pattern}).Count -lt 1){throw 'Yav Edge process not found'}
+
+            $home=(Invoke-WebRequest "http://127.0.0.1:$port/" -UseBasicParsing).Content
+            $m=[regex]::Match($home,'window\.__YAV_BOOTSTRAP__\s*=\s*(\{[^;]+\});')
+            if(-not $m.Success){throw 'bootstrap missing'}
+            $b=$m.Groups[1].Value|ConvertFrom-Json
+            $r=Invoke-WebRequest -Method Post "http://127.0.0.1:$port/api/app/shutdown" -Headers @{Origin="http://127.0.0.1:$port"} -ContentType 'application/json' -Body (@{token=$b.shutdownToken;instance_id=$b.instanceId}|ConvertTo-Json) -UseBasicParsing
+            if($r.StatusCode -ne 202){throw 'shutdown rejected'}
+            if(-not $server.WaitForExit(45000)){$server.Kill($true);throw 'server did not exit'}
+            Start-Sleep -Seconds 2
+            foreach($file in @('runtime\instance.json','runtime\shutdown.secret','runtime\instance.lock')){if(Test-Path (Join-Path $data $file)){throw "runtime residue: $file"}}
+            if(@(Get-CimInstance Win32_Process|Where-Object{$_.Name -eq 'msedge.exe' -and $_.CommandLine -match $pattern}).Count){throw 'Edge residue'}
+
+            $server=Start-Yav @('--data-dir',$data,'--port',"$port",'--no-browser') $true
+            Wait-Yav $port|Out-Null
+            Run-Yav @('--data-dir',$data,'--shutdown')
+            if(-not $server.WaitForExit(30000)){$server.Kill($true);throw 'CLI shutdown failed'}
+
+            Run-Yav @('--data-dir',$data,'--backup')
+            $backup=Get-ChildItem (Join-Path $data 'backups') -Directory|Sort-Object LastWriteTime -Descending|Select-Object -First 1
+            if(-not $backup){throw 'backup missing'}
+            Run-Yav @('--data-dir',$data,'--restore',$backup.FullName,'--dry-run')
+            python -c "import sqlite3; from pathlib import Path; p=Path(r'$data')/'library.db'; c=sqlite3.connect(p); assert c.execute('pragma integrity_check').fetchone()[0]=='ok'; c.close()"
+          }finally{
+            if($server -and -not $server.HasExited){$server.Kill($true)}
+            if($http -and -not $http.HasExited){Stop-Process -Id $http.Id -Force}
+          }
+      - name: Package checksum
+        shell: pwsh
+        run: |
+          $hash=(Get-FileHash 'dist\Yav-V2.exe' -Algorithm SHA256).Hash
+          "$hash  Yav-V2.exe" | Set-Content 'dist\SHA256SUMS.txt' -Encoding ASCII
+          Get-Item 'dist\Yav-V2.exe' | Select-Object Length
+          Get-Content 'dist\SHA256SUMS.txt'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Yav-V2-RC5-Windows
+          path: |
+            dist/Yav-V2.exe
+            dist/SHA256SUMS.txt
+          retention-days: 7
