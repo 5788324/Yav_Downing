@@ -39,7 +39,31 @@
     });
   }
 
+  function fixSourceRefresh() {
+    if (typeof sourceAction !== 'function' || typeof renderSources !== 'function') return;
+    sourceAction = async function(button, work) {
+      if (sourceOpBusy) return;
+      sourceOpBusy = true;
+      button.disabled = true;
+      let failure = null;
+      try {
+        await work();
+      } catch (error) {
+        failure = error;
+      } finally {
+        sourceOpBusy = false;
+      }
+      if (failure) {
+        showToast(failure.message);
+        button.disabled = false;
+        return;
+      }
+      await renderSources();
+    };
+  }
+
   normalizeDialogElements();
+  fixSourceRefresh();
   applyLabels();
   const sourceContent = document.getElementById('sourceContent');
   if (sourceContent) {
