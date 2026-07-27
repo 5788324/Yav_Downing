@@ -1,1 +1,5 @@
 kbd { color: #5f5d57; }
+.detail-body .content-kicker { color: #7b4025; }
+.magnet-heading p,
+.magnet-hash { color: #56544e; }
+.magnet-actions .copy-magnet { background: #874426; color: #fff; }
