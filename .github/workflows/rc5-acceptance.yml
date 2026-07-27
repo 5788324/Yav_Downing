@@ -1,0 +1,231 @@
+name: RC5 acceptance
+
+on:
+  push:
+    branches: [v2-rebuild]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rc5-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml playwright pyinstaller
+      - name: Compile Python
+        run: python -m compileall backend tests yav_v2.py
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Check JavaScript syntax
+        run: node --check backend/static/app.js
+      - name: Check whitespace
+        run: git diff --check
+
+  windows-package:
+    name: Windows package and end-to-end smoke
+    runs-on: windows-latest
+    needs: test
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install build dependencies
+        run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml playwright pyinstaller
+      - name: Build RC5 executable
+        run: python -m PyInstaller --noconfirm --clean yav_v2.spec
+
+      - name: Validate packaged startup, Edge, shutdown and recovery tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path 'dist\Yav-V2.exe').Path
+          $root = Join-Path $env:RUNNER_TEMP 'yav-rc5-acceptance'
+          $data = Join-Path $root 'data'
+          $migrationData = Join-Path $root 'migration-data'
+          $webRoot = Join-Path $root 'jphoo-site'
+          $port = 18765
+          $sitePort = 18766
+          Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item $data, $migrationData, $webRoot -ItemType Directory -Force | Out-Null
+          Set-Content -Path (Join-Path $webRoot 'index.html') -Encoding UTF8 -Value '<!doctype html><html><body><main>Yav JPHOO Edge smoke</main></body></html>'
+
+          function New-YavProcess([string[]]$Arguments, [bool]$CleanEnvironment = $false) {
+            $psi = [System.Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName = $exe
+            foreach ($argument in $Arguments) { [void]$psi.ArgumentList.Add($argument) }
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            if ($CleanEnvironment) {
+              $psi.Environment.Clear()
+              $psi.Environment['PATH'] = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\Wbem;$env:ProgramFiles\Microsoft\Edge\Application"
+              foreach ($name in @('SYSTEMROOT','WINDIR','COMSPEC','TEMP','TMP','USERPROFILE','LOCALAPPDATA','APPDATA','PROGRAMDATA','PROGRAMFILES','HOMEDRIVE','HOMEPATH')) {
+                $value = [Environment]::GetEnvironmentVariable($name)
+                if ($value) { $psi.Environment[$name] = $value }
+              }
+              $pf86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+              if ($pf86) { $psi.Environment['ProgramFiles(x86)'] = $pf86 }
+            }
+            $process = [System.Diagnostics.Process]::new()
+            $process.StartInfo = $psi
+            if (-not $process.Start()) { throw '无法启动 Yav-V2.exe' }
+            return $process
+          }
+
+          function Invoke-YavCommand([string[]]$Arguments) {
+            $process = New-YavProcess $Arguments $false
+            if (-not $process.WaitForExit(60000)) {
+              $process.Kill($true)
+              throw "Yav 命令超时：$($Arguments -join ' ')"
+            }
+            if ($process.ExitCode -ne 0) { throw "Yav 命令失败，退出码 $($process.ExitCode)：$($Arguments -join ' ')" }
+          }
+
+          function Wait-Yav([int]$ExpectedPort, [int]$Seconds = 45) {
+            $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
+            do {
+              try {
+                $status = Invoke-RestMethod "http://127.0.0.1:$ExpectedPort/api/app/status" -TimeoutSec 2
+                if ($status.app -eq 'Yav') { return $status }
+              } catch {}
+              Start-Sleep -Milliseconds 250
+            } while ([DateTime]::UtcNow -lt $deadline)
+            throw "Yav 未在端口 $ExpectedPort 就绪"
+          }
+
+          function Test-PortClosed([int]$ExpectedPort) {
+            try {
+              $client = [Net.Sockets.TcpClient]::new()
+              $client.Connect('127.0.0.1', $ExpectedPort)
+              $client.Dispose()
+              return $false
+            } catch { return $true }
+          }
+
+          $site = Start-Process python -ArgumentList @('-m','http.server',"$sitePort",'--bind','127.0.0.1','--directory',$webRoot) -PassThru -WindowStyle Hidden
+          try {
+            $server = New-YavProcess @('--data-dir',$data,'--port',"$port",'--no-browser') $true
+            $status = Wait-Yav $port
+            if ($status.version -ne '2.0.0-rc5') { throw "版本错误：$($status.version)" }
+            if (-not (Test-Path (Join-Path $data 'library.db'))) { throw '未创建 library.db' }
+            $filters = Invoke-RestMethod "http://127.0.0.1:$port/api/filters" -TimeoutSec 5
+
+            $seriesBody = @{name='CI Edge smoke'; url="http://127.0.0.1:$sitePort/"; enabled=$true} | ConvertTo-Json
+            $series = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$port/api/sources/jphoo" -ContentType 'application/json' -Body $seriesBody
+            $openBody = @{series_id=$series.id} | ConvertTo-Json
+            Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$port/api/sources/jphoo/login/open" -ContentType 'application/json' -Body $openBody | Out-Null
+            $deadline = [DateTime]::UtcNow.AddSeconds(45)
+            do {
+              Start-Sleep -Milliseconds 500
+              $jphoo = Invoke-RestMethod "http://127.0.0.1:$port/api/sources/jphoo/login" -TimeoutSec 5
+              if ($jphoo.status -in @('window_open','ready','failed')) { break }
+            } while ([DateTime]::UtcNow -lt $deadline)
+            if ($jphoo.status -notin @('window_open','ready')) { throw "打包版 JPHOO Edge 启动失败：$($jphoo.status) $($jphoo.message)" }
+
+            $profile = Join-Path $data 'browser-profile\jphoo'
+            $profilePattern = [regex]::Escape($profile)
+            $edgeProcesses = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'msedge.exe' -and $_.CommandLine -match $profilePattern })
+            if ($edgeProcesses.Count -lt 1) { throw '没有发现使用 Yav 临时 Profile 的 Edge 进程' }
+
+            $home = (Invoke-WebRequest "http://127.0.0.1:$port/" -UseBasicParsing -TimeoutSec 5).Content
+            $match = [regex]::Match($home, 'window\.__YAV_BOOTSTRAP__\s*=\s*(\{[^;]+\});')
+            if (-not $match.Success) { throw '首页未注入 shutdown bootstrap' }
+            $bootstrap = $match.Groups[1].Value | ConvertFrom-Json
+            $shutdownBody = @{token=$bootstrap.shutdownToken; instance_id=$bootstrap.instanceId} | ConvertTo-Json
+            $shutdown = Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:$port/api/app/shutdown" -Headers @{Origin="http://127.0.0.1:$port"} -ContentType 'application/json' -Body $shutdownBody -UseBasicParsing
+            if ($shutdown.StatusCode -ne 202) { throw "网页退出协议未返回 202：$($shutdown.StatusCode)" }
+            if (-not $server.WaitForExit(45000)) { $server.Kill($true); throw '网页安全退出后进程未结束' }
+            Start-Sleep -Seconds 2
+            if (-not (Test-PortClosed $port)) { throw '网页安全退出后端口仍在监听' }
+            foreach ($path in @('runtime\instance.json','runtime\shutdown.secret','runtime\instance.lock')) {
+              if (Test-Path (Join-Path $data $path)) { throw "退出后残留运行文件：$path" }
+            }
+            $remainingEdge = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'msedge.exe' -and $_.CommandLine -match $profilePattern })
+            if ($remainingEdge.Count -ne 0) { throw '安全退出后仍残留 Yav Edge 进程' }
+
+            $server = New-YavProcess @('--data-dir',$data,'--port',"$port",'--no-browser') $true
+            $null = Wait-Yav $port
+            Invoke-YavCommand @('--data-dir',$data,'--shutdown')
+            if (-not $server.WaitForExit(30000)) { $server.Kill($true); throw 'CLI shutdown 后服务进程未结束' }
+            if (-not (Test-PortClosed $port)) { throw 'CLI shutdown 后端口仍在监听' }
+
+            python -c "from backend.db import LibraryDatabase; from pathlib import Path; db=LibraryDatabase(Path(r'$data')/'library.db'); db.add_or_update_movie('ACCEPT-A')"
+            Invoke-YavCommand @('--data-dir',$data,'--backup')
+            $backup = Get-ChildItem (Join-Path $data 'backups') -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if (-not $backup) { throw 'EXE 备份未生成目录' }
+            $manifest = Get-Content (Join-Path $backup.FullName 'manifest.json') -Raw | ConvertFrom-Json
+            if (@($manifest.files.path) -contains 'runtime/instance.json') { throw '备份错误包含 runtime' }
+            python -c "from backend.db import LibraryDatabase; from pathlib import Path; db=LibraryDatabase(Path(r'$data')/'library.db'); db.add_or_update_movie('ACCEPT-B')"
+            Invoke-YavCommand @('--data-dir',$data,'--restore',$backup.FullName,'--dry-run')
+            python -c "import sqlite3; from pathlib import Path; p=Path(r'$data')/'library.db'; c=sqlite3.connect(p); assert c.execute(\"select count(*) from movies where title='ACCEPT-B'\").fetchone()[0]==1; c.close()"
+            Invoke-YavCommand @('--data-dir',$data,'--restore',$backup.FullName)
+            python -c "import sqlite3; from pathlib import Path; p=Path(r'$data')/'library.db'; c=sqlite3.connect(p); assert c.execute(\"pragma integrity_check\").fetchone()[0]=='ok'; assert c.execute(\"select count(*) from movies where title='ACCEPT-A'\").fetchone()[0]==1; assert c.execute(\"select count(*) from movies where title='ACCEPT-B'\").fetchone()[0]==0; c.close()"
+
+            $v1 = Join-Path $root 'v1.db'
+            $makeV1 = Join-Path $root 'make_v1.py'
+            @'
+import sqlite3, sys
+p=sys.argv[1]
+db=sqlite3.connect(p)
+db.executescript("""
+CREATE TABLE works(id INTEGER PRIMARY KEY, title_manual TEXT, title_auto TEXT, code_manual TEXT, code_auto TEXT, publisher_manual TEXT, publisher_auto TEXT, series TEXT, release_date_manual TEXT, release_date_auto TEXT, cover_url_manual TEXT, cover_url_auto TEXT, favorite INTEGER, site TEXT, source_url TEXT);
+CREATE TABLE actors(id INTEGER PRIMARY KEY, name TEXT);
+CREATE TABLE work_actors(work_id INTEGER, actor_id INTEGER);
+CREATE TABLE magnets(work_id INTEGER, magnet TEXT, source_site TEXT, size_gb REAL);
+""")
+db.execute("INSERT INTO works VALUES(1,'CI-001','','','','Studio','','Series','2024-01-01','','','',1,'JavDB','https://example.test/1')")
+db.execute("INSERT INTO actors VALUES(1,'演员甲')")
+db.execute("INSERT INTO work_actors VALUES(1,1)")
+db.execute("INSERT INTO magnets VALUES(1,'magnet:?xt=urn:btih:ABC123','JavDB',1.5)")
+db.commit(); db.close()
+'@ | Set-Content -Path $makeV1 -Encoding UTF8
+            python $makeV1 $v1
+            $v1Hash = (Get-FileHash $v1 -Algorithm SHA256).Hash
+            Invoke-YavCommand @('--data-dir',$migrationData,'--migrate-v1',$v1,'--dry-run')
+            if (Test-Path (Join-Path $migrationData 'library.db')) { throw 'V1 dry-run 意外创建 V2 数据库' }
+            Invoke-YavCommand @('--data-dir',$migrationData,'--migrate-v1',$v1)
+            Invoke-YavCommand @('--data-dir',$migrationData,'--migrate-v1',$v1)
+            python -c "import sqlite3; from pathlib import Path; p=Path(r'$migrationData')/'library.db'; c=sqlite3.connect(p); assert c.execute(\"pragma integrity_check\").fetchone()[0]=='ok'; assert c.execute('select count(*) from movies').fetchone()[0]==1; assert c.execute('select count(*) from magnets').fetchone()[0]==1; assert c.execute('select count(*) from magnet_sources').fetchone()[0]==1; c.close()"
+            if ((Get-FileHash $v1 -Algorithm SHA256).Hash -ne $v1Hash) { throw 'V1 数据库在迁移中被修改' }
+          }
+          finally {
+            if ($server -and -not $server.HasExited) { $server.Kill($true) }
+            if ($site -and -not $site.HasExited) { Stop-Process -Id $site.Id -Force }
+          }
+
+      - name: Record checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash 'dist\Yav-V2.exe' -Algorithm SHA256).Hash
+          "$hash  Yav-V2.exe" | Set-Content 'dist\SHA256SUMS.txt' -Encoding ASCII
+          Get-Item 'dist\Yav-V2.exe' | Select-Object FullName, Length, LastWriteTime
+          Get-Content 'dist\SHA256SUMS.txt'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Yav-V2-2.0.0-rc5-windows
+          path: |
+            dist/Yav-V2.exe
+            dist/SHA256SUMS.txt
+          retention-days: 7
