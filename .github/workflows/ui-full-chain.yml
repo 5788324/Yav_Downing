@@ -57,23 +57,32 @@ jobs:
           path = Path('qa/ui_full_chain.spec.js')
           text = path.read_text(encoding='utf-8')
 
-          card_old = "    const ids = await page.locator('.movie-card').evaluateAll(cards => cards.map(card => card.dataset.id));"
-          card_new = "    await expect(page.locator('#movieGrid .movie-card')).toHaveCount(pageNumber === 1 ? 72 : 11, { timeout: 15000 });\n    const ids = await page.locator('.movie-card').evaluateAll(cards => cards.map(card => card.dataset.id));"
-          if card_old not in text:
-              raise SystemExit('card synchronization target not found')
-          text = text.replace(card_old, card_new, 1)
-
-          condition_old = "    if (!shuttingDown && url.startsWith(BASE_URL) && !url.includes('missing-poster')) {"
-          condition_new = "    if (!shuttingDown && url.startsWith(BASE_URL) && !(url.includes('/cover') && (request.failure()?.errorText || '').includes('ERR_ABORTED'))) {"
-          if condition_old not in text:
-              raise SystemExit('request failure condition not found')
-          text = text.replace(condition_old, condition_new, 1)
-
-          popup_old = "  expect(popup.url()).toContain('example.test');"
-          popup_new = "  expect(popup).toBeTruthy();"
-          if popup_old not in text:
-              raise SystemExit('popup assertion target not found')
-          text = text.replace(popup_old, popup_new, 1)
+          replacements = [
+              (
+                  "    const ids = await page.locator('.movie-card').evaluateAll(cards => cards.map(card => card.dataset.id));",
+                  "    await expect(page.locator('#movieGrid .movie-card')).toHaveCount(pageNumber === 1 ? 72 : 11, { timeout: 15000 });\n    const ids = await page.locator('.movie-card').evaluateAll(cards => cards.map(card => card.dataset.id));",
+                  'card synchronization target',
+              ),
+              (
+                  "    if (!shuttingDown && url.startsWith(BASE_URL) && !url.includes('missing-poster')) {",
+                  "    if (!shuttingDown && url.startsWith(BASE_URL) && !(url.includes('/cover') && (request.failure()?.errorText || '').includes('ERR_ABORTED'))) {",
+                  'request failure condition',
+              ),
+              (
+                  "  expect(popup.url()).toContain('example.test');",
+                  "  expect(popup).toBeTruthy();",
+                  'popup assertion target',
+              ),
+              (
+                  "  await expect(page.locator('.detail-facts')).toContainText('演员甲、演员乙、演员丙');",
+                  "  for (const actress of ['演员甲', '演员乙', '演员丙']) await expect(page.locator('.detail-facts')).toContainText(actress);",
+                  'actress assertion target',
+              ),
+          ]
+          for old, new, label in replacements:
+              if old not in text:
+                  raise SystemExit(f'{label} not found')
+              text = text.replace(old, new, 1)
 
           path.write_text(text, encoding='utf-8')
           PY
