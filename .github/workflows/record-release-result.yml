@@ -1,0 +1,42 @@
+name: Record Yav 2.0.0 release result
+
+on:
+  workflow_run:
+    workflows: ['Release Yav 2.0.0']
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  record:
+    if: github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Write stable release result
+        shell: bash
+        run: |
+          mkdir -p docs
+          cat > docs/RELEASE_RESULT.md <<EOF
+          # Yav 2.0.0 发布结果
+
+          - 工作流：Release Yav 2.0.0
+          - 结论：${{ github.event.workflow_run.conclusion }}
+          - 版本：v2.0.0
+          EOF
+
+      - name: Commit result when changed
+        shell: bash
+        run: |
+          if git diff --quiet -- docs/RELEASE_RESULT.md; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/RELEASE_RESULT.md
+          git commit -m 'docs: record Yav 2.0.0 release result'
+          git push origin HEAD:main
