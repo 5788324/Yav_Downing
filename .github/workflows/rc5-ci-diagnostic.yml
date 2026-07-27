@@ -1,0 +1,116 @@
+name: RC5 package diagnostics
+
+on:
+  pull_request:
+    branches: ['ci/rc5-base']
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -q requests beautifulsoup4 lxml playwright pyinstaller
+      - name: Build quietly
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean yav_v2.spec *> build.log
+          if ($LASTEXITCODE -ne 0) { Get-Content build.log -Tail 100; exit $LASTEXITCODE }
+      - name: Staged packaged diagnostic
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $stage='setup'
+          $exe=(Resolve-Path 'dist\Yav-V2.exe').Path
+          $root=Join-Path $env:RUNNER_TEMP 'yav-rc5-diagnostic'
+          $data=Join-Path $root 'data'
+          $site=Join-Path $root 'site'
+          $port=18765
+          $sitePort=18766
+          Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item $data,$site -ItemType Directory -Force|Out-Null
+          Set-Content (Join-Path $site 'index.html') '<html><body>local smoke</body></html>'
+
+          function Start-Yav([string[]]$arguments,[bool]$clean=$false){
+            $psi=[Diagnostics.ProcessStartInfo]::new();$psi.FileName=$exe
+            foreach($arg in $arguments){[void]$psi.ArgumentList.Add($arg)}
+            $psi.UseShellExecute=$false;$psi.CreateNoWindow=$true
+            if($clean){
+              $psi.Environment.Clear()
+              $psi.Environment['PATH']="$env:SystemRoot\System32;$env:SystemRoot;$env:ProgramFiles\Microsoft\Edge\Application"
+              foreach($name in @('SYSTEMROOT','WINDIR','COMSPEC','TEMP','TMP','USERPROFILE','LOCALAPPDATA','APPDATA','PROGRAMDATA','PROGRAMFILES')){$value=[Environment]::GetEnvironmentVariable($name);if($value){$psi.Environment[$name]=$value}}
+              $pf86=[Environment]::GetEnvironmentVariable('ProgramFiles(x86)');if($pf86){$psi.Environment['ProgramFiles(x86)']=$pf86}
+            }
+            $p=[Diagnostics.Process]::new();$p.StartInfo=$psi
+            if(-not $p.Start()){throw 'Process.Start returned false'}
+            return $p
+          }
+          function Wait-Yav(){
+            $deadline=[DateTime]::UtcNow.AddSeconds(45)
+            do{try{$s=Invoke-RestMethod "http://127.0.0.1:$port/api/app/status" -TimeoutSec 2;if($s.app -eq 'Yav'){return $s}}catch{};Start-Sleep -Milliseconds 250}while([DateTime]::UtcNow -lt $deadline)
+            throw 'status endpoint readiness timeout'
+          }
+
+          $server=$null;$http=$null
+          try{
+            $stage='local-http';Write-Host "STAGE=$stage"
+            $http=Start-Process python -ArgumentList @('-m','http.server',"$sitePort",'--bind','127.0.0.1','--directory',$site) -PassThru -WindowStyle Hidden
+
+            $stage='packaged-start-clean-env';Write-Host "STAGE=$stage"
+            $server=Start-Yav @('--data-dir',$data,'--port',"$port",'--no-browser') $true
+            $status=Wait-Yav
+            Write-Host "STATUS_VERSION=$($status.version) PID=$($status.pid)"
+            if($status.version -ne '2.0.0-rc5'){throw "wrong version $($status.version)"}
+            Invoke-RestMethod "http://127.0.0.1:$port/api/filters"|Out-Null
+
+            $stage='packaged-edge-open';Write-Host "STAGE=$stage"
+            $series=Invoke-RestMethod -Method Post "http://127.0.0.1:$port/api/sources/jphoo" -ContentType 'application/json' -Body (@{name='CI';url="http://127.0.0.1:$sitePort/";enabled=$true}|ConvertTo-Json)
+            Invoke-RestMethod -Method Post "http://127.0.0.1:$port/api/sources/jphoo/login/open" -ContentType 'application/json' -Body (@{series_id=$series.id}|ConvertTo-Json)|Out-Null
+            $deadline=[DateTime]::UtcNow.AddSeconds(45)
+            do{Start-Sleep -Milliseconds 500;$j=Invoke-RestMethod "http://127.0.0.1:$port/api/sources/jphoo/login"}while($j.status -notin @('window_open','ready','failed') -and [DateTime]::UtcNow -lt $deadline)
+            Write-Host "JPHOO_STATUS=$($j.status) MESSAGE=$($j.message)"
+            if($j.status -notin @('window_open','ready')){throw "Edge state $($j.status): $($j.message)"}
+            $profile=Join-Path $data 'browser-profile\jphoo';$pattern=[regex]::Escape($profile)
+            $edgeCount=@(Get-CimInstance Win32_Process|Where-Object{$_.Name -eq 'msedge.exe' -and $_.CommandLine -match $pattern}).Count
+            Write-Host "EDGE_COUNT=$edgeCount PROFILE=$profile"
+            if($edgeCount -lt 1){throw 'profile Edge process not found'}
+
+            $stage='packaged-api-shutdown';Write-Host "STAGE=$stage"
+            $home=(Invoke-WebRequest "http://127.0.0.1:$port/" -UseBasicParsing).Content
+            $m=[regex]::Match($home,'window\.__YAV_BOOTSTRAP__\s*=\s*(\{[^;]+\});')
+            if(-not $m.Success){throw 'bootstrap regex did not match'}
+            $b=$m.Groups[1].Value|ConvertFrom-Json
+            $r=Invoke-WebRequest -Method Post "http://127.0.0.1:$port/api/app/shutdown" -Headers @{Origin="http://127.0.0.1:$port"} -ContentType 'application/json' -Body (@{token=$b.shutdownToken;instance_id=$b.instanceId}|ConvertTo-Json) -UseBasicParsing
+            Write-Host "SHUTDOWN_HTTP=$($r.StatusCode)"
+            if(-not $server.WaitForExit(45000)){throw 'server did not exit after API shutdown'}
+            Start-Sleep -Seconds 2
+            $residue=@('runtime\instance.json','runtime\shutdown.secret','runtime\instance.lock')|Where-Object{Test-Path (Join-Path $data $_)}
+            $edgeAfter=@(Get-CimInstance Win32_Process|Where-Object{$_.Name -eq 'msedge.exe' -and $_.CommandLine -match $pattern}).Count
+            Write-Host "RUNTIME_RESIDUE=$($residue -join ',') EDGE_AFTER=$edgeAfter EXIT=$($server.ExitCode)"
+            if($residue){throw "runtime residue $($residue -join ',')"}
+            if($edgeAfter){throw "Edge residue $edgeAfter"}
+            Write-Host 'DIAGNOSTIC_SUCCESS'
+          }catch{
+            Write-Host "::error::FAILED_STAGE=$stage MESSAGE=$($_.Exception.Message)"
+            Write-Host ($_ | Format-List * -Force | Out-String)
+            if(Test-Path (Join-Path $data 'logs\yav.log')){Write-Host '--- YAV LOG TAIL ---';Get-Content (Join-Path $data 'logs\yav.log') -Tail 80}
+            throw
+          }finally{
+            if($server -and -not $server.HasExited){$server.Kill($true)}
+            if($http -and -not $http.HasExited){Stop-Process -Id $http.Id -Force}
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rc5-diagnostic
+          path: |
+            build.log
+            ${{ runner.temp }}/yav-rc5-diagnostic/data/logs/
+          if-no-files-found: ignore
+          retention-days: 3
