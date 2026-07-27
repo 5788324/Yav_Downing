@@ -104,8 +104,8 @@ jobs:
             Report "READY version=$($status.version) pid=$($status.pid)"
 
             Report 'STAGE=assets'
-            $home = (Invoke-WebRequest "http://127.0.0.1:$port/" -UseBasicParsing).Content
-            if ($home -notmatch '/assets/accessibility.css' -or $home -notmatch '/assets/accessibility.js') {
+            $homepage = (Invoke-WebRequest "http://127.0.0.1:$port/" -UseBasicParsing).Content
+            if ($homepage -notmatch '/assets/accessibility.css' -or $homepage -notmatch '/assets/accessibility.js') {
               throw 'Patched UI assets are not referenced by the packaged homepage'
             }
             foreach ($asset in @('accessibility.css', 'accessibility.js')) {
