@@ -146,7 +146,7 @@ jobs:
             }
 
             Run-Yav @('--data-dir', $data, '--shutdown')
-            if (-not $server.WaitForExit(30000)) { throw 'Packaged service did not exit' }
+            if (-not $server.WaitForExit(30000)) { throw 'Packaged service process did not exit' }
             $client = [Net.Sockets.TcpClient]::new()
             try {
               $client.Connect('127.0.0.1', $port)
