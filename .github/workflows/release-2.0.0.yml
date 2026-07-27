@@ -40,11 +40,40 @@ jobs:
           if ($version -ne '2.0.0') {
             throw "Expected APP_VERSION 2.0.0, got $version"
           }
+
           $ErrorActionPreference = 'Continue'
           gh release view v2.0.0 --repo $env:GITHUB_REPOSITORY *> $null
           $exists = $LASTEXITCODE -eq 0
           $global:LASTEXITCODE = 0
           $ErrorActionPreference = 'Stop'
+
+          if ($exists) {
+            $releaseDir = Join-Path $env:RUNNER_TEMP 'yav-v2-release-assets'
+            Remove-Item $releaseDir -Recurse -Force -ErrorAction SilentlyContinue
+            New-Item $releaseDir -ItemType Directory -Force | Out-Null
+            gh release download v2.0.0 `
+              --repo $env:GITHUB_REPOSITORY `
+              --pattern 'Yav-V2.exe' `
+              --pattern 'SHA256SUMS.txt' `
+              --dir $releaseDir `
+              --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to download release assets' }
+
+            $exe = Join-Path $releaseDir 'Yav-V2.exe'
+            $sums = Join-Path $releaseDir 'SHA256SUMS.txt'
+            if (-not (Test-Path $exe) -or -not (Test-Path $sums)) {
+              throw 'Required release assets are missing'
+            }
+            $expected = ((Get-Content $sums -Raw).Trim() -split '\s+')[0].ToUpperInvariant()
+            $actual = (Get-FileHash $exe -Algorithm SHA256).Hash.ToUpperInvariant()
+            if ($actual -ne $expected) {
+              throw "Release checksum mismatch: expected $expected actual $actual"
+            }
+            $size = (Get-Item $exe).Length
+            Write-Host "RELEASE_ASSET_SIZE=$size"
+            Write-Host "RELEASE_SHA256=$actual"
+          }
+
           "exists=$($exists.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           exit 0
 
