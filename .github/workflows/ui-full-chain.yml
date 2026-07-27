@@ -32,7 +32,10 @@ jobs:
           npx playwright install --with-deps chromium
 
       - name: Create deterministic UI fixture
-        run: python qa/ui_seed.py "$RUNNER_TEMP/yav-ui-data"
+        shell: bash
+        run: |
+          set -o pipefail
+          python qa/ui_seed.py "$RUNNER_TEMP/yav-ui-data" 2>&1 | tee "$RUNNER_TEMP/yav-ui-seed.log"
 
       - name: Start Yav source server
         run: |
@@ -61,6 +64,7 @@ jobs:
             test-results/ui-audit/
             playwright-report/
             test-results/
+            ${{ runner.temp }}/yav-ui-seed.log
             ${{ runner.temp }}/yav-ui-server.log
           if-no-files-found: warn
           retention-days: 14
