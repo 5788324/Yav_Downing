@@ -1,0 +1,38 @@
+name: Verify Yav 2.0.1 release assets
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  verify:
+    if: github.head_ref == 'release-trigger-v2.0.1'
+    runs-on: windows-latest
+    steps:
+      - name: Download, verify and report official assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'yav-v2.0.1-assets'
+          New-Item $root -ItemType Directory -Force | Out-Null
+          gh release download v2.0.1 `
+            --repo $env:GITHUB_REPOSITORY `
+            --pattern 'Yav-V2.exe' `
+            --pattern 'SHA256SUMS.txt' `
+            --dir $root `
+            --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Release download failed' }
+          $exe = Join-Path $root 'Yav-V2.exe'
+          $sums = Join-Path $root 'SHA256SUMS.txt'
+          $expected = ((Get-Content $sums -Raw).Trim() -split '\s+')[0].ToUpperInvariant()
+          $actual = (Get-FileHash $exe -Algorithm SHA256).Hash.ToUpperInvariant()
+          $size = (Get-Item $exe).Length
+          if ($actual -ne $expected) { throw "Checksum mismatch: expected $expected actual $actual" }
+          $body = "Yav 2.0.1 正式资产校验通过。`n`n- EXE 大小：$size bytes`n- SHA-256：$actual`n- 标签：v2.0.1"
+          gh pr comment ${{ github.event.pull_request.number }} --repo $env:GITHUB_REPOSITORY --body $body
