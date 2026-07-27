@@ -37,8 +37,19 @@ jobs:
         run: |
           $version = python -c "from backend.runtime import APP_VERSION; print(APP_VERSION)"
           if ($version -ne '2.0.1') { throw "Expected APP_VERSION 2.0.1, got $version" }
-          cmd /c "gh release view v2.0.1 --repo %GITHUB_REPOSITORY% >nul 2>&1"
-          $exists = $LASTEXITCODE -eq 0
+          $headers = @{
+            Authorization = "Bearer $env:GH_TOKEN"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $exists = $false
+          try {
+            Invoke-RestMethod "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/tags/v2.0.1" -Headers $headers | Out-Null
+            $exists = $true
+          } catch {
+            $statusCode = [int]$_.Exception.Response.StatusCode
+            if ($statusCode -ne 404) { throw }
+          }
           "exists=$($exists.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
 
       - name: Install dependencies
