@@ -5,6 +5,15 @@
     openSources: '来源管理',
   };
 
+  function normalizeDialogElements() {
+    document.querySelectorAll('article.detail-panel[role="dialog"]').forEach(article => {
+      const dialog = document.createElement('div');
+      for (const attribute of article.attributes) dialog.setAttribute(attribute.name, attribute.value);
+      while (article.firstChild) dialog.appendChild(article.firstChild);
+      article.replaceWith(dialog);
+    });
+  }
+
   function applyLabels(root = document) {
     Object.entries(labels).forEach(([id, label]) => {
       const element = document.getElementById(id);
@@ -30,6 +39,7 @@
     });
   }
 
+  normalizeDialogElements();
   applyLabels();
   const sourceContent = document.getElementById('sourceContent');
   if (sourceContent) {
