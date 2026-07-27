@@ -3,6 +3,8 @@ name: Release Yav 2.0.0
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -14,11 +16,14 @@ concurrency:
 
 jobs:
   release:
+    if: github.event_name != 'pull_request' || github.head_ref == 'release-trigger-v2.0.0'
     runs-on: windows-latest
     timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
       - uses: actions/setup-python@v5
         with:
@@ -158,11 +163,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $target = git rev-parse HEAD
           gh release create v2.0.0 `
             'dist\Yav-V2.exe' `
             'dist\SHA256SUMS.txt' `
             'docs\RELEASE_NOTES_2.0.0.md' `
             --repo $env:GITHUB_REPOSITORY `
-            --target $env:GITHUB_SHA `
+            --target $target `
             --title 'Yav 2.0.0' `
             --notes-file 'docs\RELEASE_NOTES_2.0.0.md'
