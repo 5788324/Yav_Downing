@@ -50,6 +50,20 @@ jobs:
           cat "$RUNNER_TEMP/yav-ui-server.log"
           exit 1
 
+      - name: Synchronize exhaustive card passes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('qa/ui_full_chain.spec.js')
+          text = path.read_text(encoding='utf-8')
+          old = """    const ids = await page.locator('.movie-card').evaluateAll(cards => cards.map(card => card.dataset.id));"""
+          new = """    await expect(page.locator('#movieGrid .movie-card')).toHaveCount(pageNumber === 1 ? 72 : 11, { timeout: 15000 });
+              const ids = await page.locator('.movie-card').evaluateAll(cards => cards.map(card => card.dataset.id));"""
+          if old not in text:
+              raise SystemExit('card synchronization target not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
       - name: Run every-control Playwright audit
         env:
           BASE_URL: http://127.0.0.1:18765
