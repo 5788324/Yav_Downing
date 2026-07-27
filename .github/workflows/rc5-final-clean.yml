@@ -1,0 +1,42 @@
+name: RC5 final clean acceptance
+
+on:
+  pull_request:
+    branches: ['ci/rc5-base']
+
+permissions:
+  contents: read
+
+jobs:
+  final:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -q requests beautifulsoup4 lxml playwright pyinstaller
+      - run: python -m PyInstaller --noconfirm --clean yav_v2.spec
+      - name: Run strict packaged acceptance
+        shell: pwsh
+        run: ./ci/rc5_package_acceptance.ps1 -ExePath ./dist/Yav-V2.exe
+      - name: Record checksum
+        if: always()
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash 'dist\Yav-V2.exe' -Algorithm SHA256).Hash
+          "$hash  Yav-V2.exe" | Set-Content 'dist\SHA256SUMS.txt' -Encoding ASCII
+          Get-Item 'dist\Yav-V2.exe' | Select-Object Length
+          Get-Content 'dist\SHA256SUMS.txt'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Yav-V2-RC5-final
+          path: |
+            dist/Yav-V2.exe
+            dist/SHA256SUMS.txt
+            ${{ runner.temp }}/rc5-final-report.txt
+            ${{ runner.temp }}/yav-rc5-final/data/logs/
+          if-no-files-found: warn
+          retention-days: 7
