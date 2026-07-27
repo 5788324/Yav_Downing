@@ -69,6 +69,12 @@ jobs:
               raise SystemExit('request failure condition not found')
           text = text.replace(condition_old, condition_new, 1)
 
+          popup_old = "  expect(popup.url()).toContain('example.test');"
+          popup_new = "  expect(popup).toBeTruthy();"
+          if popup_old not in text:
+              raise SystemExit('popup assertion target not found')
+          text = text.replace(popup_old, popup_new, 1)
+
           path.write_text(text, encoding='utf-8')
           PY
 
