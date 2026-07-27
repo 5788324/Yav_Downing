@@ -36,11 +36,14 @@ jobs:
           $size = (Get-Item $exe).Length
           if ($actual -ne $expected) { throw "Checksum mismatch: expected $expected actual $actual" }
 
+          Write-Host "RELEASE_ASSET_SIZE=$size"
+          Write-Host "RELEASE_SHA256=$actual"
+
           $body = @"
           Yav 2.0.0 正式资产校验通过。
 
           - EXE 大小：$size bytes
-          - SHA-256：`$actual`
-          - 标签：`v2.0.0`
+          - SHA-256：$actual
+          - 标签：v2.0.0
           "@
           gh pr comment ${{ github.event.pull_request.number }} --repo $env:GITHUB_REPOSITORY --body $body
