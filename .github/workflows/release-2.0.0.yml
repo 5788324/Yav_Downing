@@ -43,8 +43,10 @@ jobs:
           $ErrorActionPreference = 'Continue'
           gh release view v2.0.0 --repo $env:GITHUB_REPOSITORY *> $null
           $exists = $LASTEXITCODE -eq 0
+          $global:LASTEXITCODE = 0
           $ErrorActionPreference = 'Stop'
           "exists=$($exists.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          exit 0
 
       - name: Install dependencies
         if: steps.state.outputs.exists != 'true'
