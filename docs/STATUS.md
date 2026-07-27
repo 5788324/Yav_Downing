@@ -4,11 +4,19 @@
 
 ## 当前结论
 
-Yav 2.0.0 的功能开发和发布候选验收已经完成。版本号已切换为 `2.0.0`，当前正在执行正式合并、Windows 构建、标签和 GitHub Release 发布。
+**Yav 2.0.0 已正式发布。**
+
+- 正式分支：`main`
+- 正式标签：`v2.0.0`
+- Windows 文件：`Yav-V2.exe`
+- EXE 大小：55,196,090 bytes
+- SHA-256：`E801B5201C81625863DC5853088B6BB76401DA53590A24EEE97770975CA6021C`
+
+正式发布资产已从 GitHub Release 重新下载并复算 SHA-256，结果与发布的 `SHA256SUMS.txt` 一致。
 
 ## 已完成
 
-- SQLite 资料库与三种浏览视图。
+- SQLite 资料库与海报墙、收藏架、资料册。
 - JavDB、JPHOO 扫描、停止、继续和重启恢复。
 - JPHOO 独立 Edge Profile 与登录复用。
 - V1 只读迁移、dry-run 和幂等执行。
@@ -40,19 +48,10 @@ Yav 2.0.0 的功能开发和发布候选验收已经完成。版本号已切换�
 
 验收报告：`FINAL_ACCEPTANCE_SUCCESS`
 
-## 正式发布流程
+## 分支与维护
 
-```text
-版本切换为 2.0.0
-→ 合并 v2-rebuild 到 main
-→ 干净 Windows runner 重新测试和构建
-→ 生成 SHA256SUMS.txt
-→ 创建 v2.0.0 标签和 GitHub Release
-```
+- `main`：Yav 2.x 正式主分支。
+- `v1-frozen`：V1 永久冻结基线。
+- `v2-rebuild`：保留 V2 重建历史，不再作为日常发布主线。
 
-## 发布后原则
-
-- `main` 作为 Yav 2.x 正式主分支。
-- `v1-frozen` 永久保留。
-- 不在 2.0.0 发布链路中新增功能。
-- 仅针对真实使用中发现的缺陷安排修复版本。
+2.0.0 发布后只处理真实使用中发现的缺陷，不继续预设发布门槛或增加计划外功能。
