@@ -78,6 +78,11 @@ jobs:
                   "  for (const actress of ['演员甲', '演员乙', '演员丙']) await expect(page.locator('.detail-facts')).toContainText(actress);",
                   'actress assertion target',
               ),
+              (
+                  "  await newJavdbCard.getByRole('button', { name: '编辑' }).click();\n  await javdbForm.locator('[name=\"name\"]').fill('UI 已编辑 JavDB');",
+                  "  await newJavdbCard.getByRole('button', { name: '编辑' }).click();\n  await expect(javdbForm.locator('[data-form-title]')).toContainText('编辑 UI 新增 JavDB');\n  await javdbForm.locator('[name=\"name\"]').fill('UI 已编辑 JavDB');",
+                  'second edit readiness target',
+              ),
           ]
           for old, new, label in replacements:
               if old not in text:
