@@ -34,7 +34,7 @@ def is_invalid_metadata(value: str) -> bool:
     clean = re.sub(r"\s+", " ", value or "").strip()
     if not clean:
         return True
-    invalid = {"首页", "上一页", "下一页", "登录", "注册", "查看更多", "影片信息", "演员列表", "磁力下载", "返回顶部", "查看全部作品"}
+    invalid = {"首页", "上一页", "下一页", "登录", "注册", "查看更多", "影片信息", "演员列表", "磁力下载", "返回顶部", "查看全部作品", "推荐", "推薦", "有碼", "有码", "歐美", "欧美", "演員", "演员", "無碼", "无码"}
     return clean in invalid or clean.startswith("查看") and clean.endswith("全部作品")
 
 def extract_btih(magnet: str) -> str:
@@ -164,6 +164,10 @@ CREATE INDEX IF NOT EXISTS idx_source_series_source ON source_series(source,enab
                     pass
             db.execute("UPDATE schema_meta SET value='3' WHERE key='schema_version'")
             db.execute("UPDATE scan_runs SET status='interrupted', finished_at=? WHERE status IN ('running','stopping')", (self.now(),))
+            invalid = ("推荐", "推薦", "有碼", "有码", "歐美", "欧美", "演員", "演员", "無碼", "无码")
+            placeholders = ",".join("?" for _ in invalid)
+            db.execute(f"DELETE FROM movie_actresses WHERE actress_id IN (SELECT id FROM actresses WHERE name IN ({placeholders})) AND movie_id IN (SELECT id FROM movies WHERE manual_fields NOT LIKE '%\"actresses\"%')", invalid)
+            db.execute("DELETE FROM actresses WHERE NOT EXISTS (SELECT 1 FROM movie_actresses WHERE movie_actresses.actress_id=actresses.id)")
 
     @staticmethod
     def now() -> str:

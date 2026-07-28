@@ -125,5 +125,12 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertNotIn("JSON.stringify({...item", app)
 
 
+    def test_scan_refresh_contract(self):
+        app = (Path(__file__).parents[1] / "backend" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("let sourceScanActive = false", app)
+        self.assertIn("scanning ||= scan.status === 'running' || scan.status === 'stopping'", app)
+        self.assertIn("Promise.all([loadFilters(), loadMovies()])", app)
+        self.assertIn("if (justStopped) await renderSources()", app)
+
 if __name__ == "__main__":
     unittest.main()

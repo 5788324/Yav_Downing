@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from threading import Event
 from urllib.parse import urljoin, urlparse
 import requests
+from ..db import is_invalid_metadata
 from bs4 import BeautifulSoup
 
 @dataclass
@@ -30,7 +31,7 @@ class JavdbSource:
                 if attempt<2: time.sleep(attempt+1)
         raise RuntimeError('JavDB 请求连续失败')
     def scan_series(self,url,*,start_page=1,stop_event:Event|None=None):
-        current=url; page=start_page
+        current=url; page=1
         while current:
             if stop_event and stop_event.is_set(): return
             soup=BeautifulSoup(self.request(current),'lxml'); base=f'{urlparse(current).scheme}://{urlparse(current).netloc}'
@@ -38,7 +39,8 @@ class JavdbSource:
             for a in soup.select('a[href^="/v/"]'):
                 href=a.get('href','')
                 if '?' not in href and '#' not in href: links.append(urljoin(base,href))
-            yield page,list(dict.fromkeys(links))
+            if page >= start_page:
+                yield page,list(dict.fromkeys(links))
             next_link=soup.select_one('a.pagination-next[rel="next"]'); current=urljoin(base,next_link['href']) if next_link and next_link.get('href') else None; page+=1
             if current: time.sleep(self.delay)
     def fetch_movie(self,url):
@@ -47,7 +49,7 @@ class JavdbSource:
         cover=soup.select_one('meta[property="og:image"],.video-cover img,.cover img'); cover=urljoin(url,(cover.get('content') or cover.get('src',''))) if cover else ''
         date=re.search(r'(?:發行日期|发行日期|日期)\s*[:：]?\s*(\d{4}[./-]\d{1,2}[./-]\d{1,2})',text)
         duration=re.search(r'(?:長度|长度|時長|时长)\s*[:：]?\s*(\d+)',text)
-        actresses=[a.get_text(' ',strip=True) for a in soup.select('a[href*="actor"],a[href*="performer"]') if a.get_text(strip=True)]
+        actresses=[a.get_text(' ',strip=True) for a in soup.select('a[href^="/actor/"],a[href^="/actors/"],a[href^="/performer/"],a[href^="/performers/"]') if a.get_text(strip=True) and not is_invalid_metadata(a.get_text(' ',strip=True))]
         studios=[a.get_text(' ',strip=True) for a in soup.select('a[href*="maker"],a[href*="studio"],a[href*="publisher"]') if a.get_text(strip=True)]
         return SourceMovie(title=title, source_url=url, cover_url=cover, studio=studios[0] if studios else '', release_date=date.group(1).replace('/','-').replace('.','-') if date else '', duration_minutes=int(duration.group(1)) if duration else None, actresses=list(dict.fromkeys(actresses)))
     def fetch_magnets(self,url):

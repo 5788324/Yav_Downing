@@ -439,6 +439,7 @@ async function init() {
 init();
 
 let sourcePollTimer = null;
+let sourceScanActive = false;
 let sourceOpBusy = false;
 let sourceLastTrigger = null;
 
@@ -486,11 +487,17 @@ function closeSources() { $('#sourceOverlay').hidden = true; $('#openSources').r
 async function refreshSourceStatuses() {
   if ($('#sourceOverlay').hidden || sourceOpBusy || document.activeElement?.closest('.source-form')) return;
   try {
+    let scanning = false;
     for (const source of ['javdb','jphoo']) {
       const scan = await request(`/api/sources/${source}/scan`);
+      scanning ||= scan.status === 'running' || scan.status === 'stopping';
       const box = $(`[data-scan-status="${source}"]`);
       if (box) box.textContent = `当前扫描：${scan.series_name || '无'} · 来源：${scan.source || source} · 状态：${scan.status || 'idle'} · 当前页：${scan.current_page || scan.page || 0} · 发现：${scan.discovered || 0} · 处理：${scan.processed_count || scan.processed || 0} · 新磁链：${scan.new_magnets || 0} · 失败：${scan.failures || 0}`;
     }
+    const justStopped = sourceScanActive && !scanning;
+    sourceScanActive = scanning;
+    if (scanning || justStopped) await Promise.all([loadFilters(), loadMovies()]);
+    if (justStopped) await renderSources();
   } catch (_) { /* 保留当前界面，下一次轮询重试 */ }
 }
 async function sourceAction(button, work) {
