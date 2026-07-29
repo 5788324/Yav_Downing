@@ -522,7 +522,10 @@ if (button.dataset.login) { const series=$('#jphooLoginSeries'); const payload=b
   if (button.dataset.toggle) return sourceAction(button, async () => { const item=(await request(`/api/sources/${source}`)).find(row=>String(row.id)===button.dataset.toggle); await request(`/api/sources/${source}`,{method:'POST',body:JSON.stringify({series_id:item.id,name:item.name,url:item.url,enabled:button.dataset.enabled==='true',profile_dir:item.profile_dir||''})}); });
   const action = button.dataset.scan ? 'scan' : button.dataset.continue ? 'continue' : button.dataset.stop ? 'stop' : '';
   const id = button.dataset.scan || button.dataset.continue || button.dataset.stop;
-  if (action) sourceAction(button, () => request(`/api/sources/${source}/${id}/${action}`, {method:'POST',body:'{}'}));
+  if (action) {
+    if (action === 'scan' && !window.confirm('将从第一页重新扫描该系列。现有资料不会删除，但会重新请求全部页面。是否继续？')) return;
+    sourceAction(button, async () => { await request(/api/sources///, {method:'POST',body:'{}'}); ensureSourcePolling(); });
+  }
 });
 
 async function waitForYavShutdown() {
