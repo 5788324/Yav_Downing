@@ -524,7 +524,7 @@ if (button.dataset.login) { const series=$('#jphooLoginSeries'); const payload=b
   const id = button.dataset.scan || button.dataset.continue || button.dataset.stop;
   if (action) {
     if (action === 'scan' && !window.confirm('将从第一页重新扫描该系列。现有资料不会删除，但会重新请求全部页面。是否继续？')) return;
-    sourceAction(button, async () => { await request(/api/sources///, {method:'POST',body:'{}'}); ensureSourcePolling(); });
+    sourceAction(button, async () => { await request(`/api/sources/${source}/${id}/${action}`, {method:'POST', body:'{}'}); ensureSourcePolling(); });
   }
 });
 

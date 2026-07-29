@@ -133,6 +133,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("Promise.allSettled", app)
         self.assertIn("ensureSourcePolling", app)
         self.assertIn("将从第一页重新扫描该系列", app)
+        self.assertIn("request(`/api/sources/${source}/${id}/${action}`", app)
         self.assertIn("window.confirm", app)
         self.assertIn("if (!$(\x27#sourceOverlay\x27).hidden) closeSources()", app)
         self.assertIn("aria-current", app)
