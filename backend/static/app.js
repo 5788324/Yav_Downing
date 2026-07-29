@@ -460,9 +460,10 @@ function sourcePayload(form, source) {
 }
 function sourceButtons(item, sessionLogin = 'ready') {
   const state = item.scan_status || (item.enabled ? 'idle' : 'disabled');
-  const locked = ['running', 'stopping'].includes(state);
+  const locked = ['starting', 'running', 'stopping'].includes(state);
   const needsLogin = item.source === 'jphoo' && sessionLogin !== 'ready';
   const disabled = !item.enabled || locked || needsLogin;
+  if (state === 'starting') return '<button disabled>正在启动…</button>';
   if (state === 'running') return `<button data-source="${item.source}" data-stop="${item.id}">停止扫描</button>`;
   if (state === 'stopping') return '<button disabled>正在停止…</button>';
   if (!item.enabled) return `<button data-source="${item.source}" data-toggle="${item.id}" data-enabled="true">启用</button><button data-source="${item.source}" data-edit="${item.id}">编辑</button><button data-source="${item.source}" data-delete="${item.id}">删除</button>`;
@@ -506,7 +507,9 @@ async function refreshSourceStatuses() {
     const transition = reconcileScanStates(sourceScanStates, scans); Object.assign(sourceScanStates, transition.next);
     const loginPolling = login && (new Set(['opening','checking','closing','window_open']).has(login.status) || new Set(['opening','checking','closing','window_open']).has(login.login));
     if (transition.refreshLibrary) await Promise.all([loadFilters(), loadMovies({ silent: true })]);
-    if ((transition.stoppedSources.length || loginPolling) && !$('#sourceOverlay').hidden) await renderSources();
+const shownLogin = $('[data-login-state]')?.textContent?.trim() || '';
+    const loginChanged = Boolean(login && shownLogin !== loginDisplayState(login));
+    if ((transition.stoppedSources.length || loginPolling || loginChanged) && !$('#sourceOverlay').hidden) await renderSources();
     if (!Object.values(transition.next).some(Boolean) && !loginPolling) { clearInterval(sourcePollTimer); sourcePollTimer = null; }
   } catch (_) {
     sourceStatusFailures += 1;

@@ -256,7 +256,7 @@ class JphooSessionManager:
         with self.lock:
             if self.scanner or self.result.get("scanning") or self.result.get("status") in {"starting", "running", "stopping"}:
                 raise ValueError("JPHOO 扫描正在运行")
-            if not self.result.get("window_open") or self.result.get("login") != "ready":
+            if self.result.get("status") != "ready" or self.result.get("login") != "ready" or self.result.get("window_open") is not True:
                 raise ValueError("请先打开会话并验证 JPHOO 登录状态")
             # 先保留 starting 状态，再把命令交给会话线程，避免重复点击在 scanner 创建前排入两次。
             self.series_id = series_id
