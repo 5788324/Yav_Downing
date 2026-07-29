@@ -442,6 +442,7 @@ init();
 
 let sourcePollTimer = null;
 let sourceRefreshInFlight = false;
+let sourceStatusFailures = 0;
 const sourceScanStates = { javdb: false, jphoo: false };
 let sourceOpBusy = false;
 let sourceLastTrigger = null;
@@ -494,11 +495,15 @@ async function refreshSourceStatuses() {
   try {
     const scans = {};
     for (const source of ['javdb','jphoo']) { const scan = await request(`/api/sources/${source}/scan`); scans[source] = scan; const box = $(`[data-scan-status="${source}"]`); if (box) box.textContent = `当前扫描：${scan.series_name || '无'} · 来源：${scan.source || source} · 状态：${scan.status || 'idle'} · 当前页：${scan.current_page || scan.page || 0} · 发现：${scan.discovered || 0} · 处理：${scan.processed_count || scan.processed || 0} · 新磁链：${scan.new_magnets || 0} · 失败：${scan.failures || 0}`; }
+    sourceStatusFailures = 0;
     const transition = reconcileScanStates(sourceScanStates, scans); Object.assign(sourceScanStates, transition.next);
     if (transition.refreshLibrary) await Promise.all([loadFilters(), loadMovies({ silent: true })]);
     if (transition.stoppedSources.length && !$('#sourceOverlay').hidden) await renderSources();
     if (!Object.values(transition.next).some(Boolean)) { clearInterval(sourcePollTimer); sourcePollTimer = null; }
-  } catch (_) { } finally { sourceRefreshInFlight = false; }
+  } catch (_) {
+    sourceStatusFailures += 1;
+    if (sourceStatusFailures === 3) showToast("来源状态读取连续失败，显示的进度可能已过期。");
+  } finally { sourceRefreshInFlight = false; }
 }
 async function sourceAction(button, work) {
   if (sourceOpBusy) return; sourceOpBusy = true; button.disabled = true;

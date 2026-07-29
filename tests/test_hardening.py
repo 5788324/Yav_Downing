@@ -137,6 +137,8 @@ class FrontendStaticTests(unittest.TestCase):
     def test_source_panel_safety_contracts(self):
         app = (Path(__file__).parents[1] / "backend" / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn("sourceRefreshInFlight", app)
+        self.assertIn("sourceStatusFailures", app)
+        self.assertIn("连续失败，显示的进度可能已过期", app)
         self.assertIn("Promise.allSettled", app)
         self.assertIn("ensureSourcePolling", app)
         self.assertIn("将从第一页重新扫描该系列", app)
