@@ -201,7 +201,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path.startswith("/assets/"):
             filename = Path(path.removeprefix("/assets/")).name
-            self._serve_file(STATIC_DIR / filename)
+            # 本地应用可能在同一地址重启到新版本，前端资源不能让浏览器沿用旧脚本。
+            self._serve_file(STATIC_DIR / filename, cache=False)
             return
         self.send_error(404)
 
