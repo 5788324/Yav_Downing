@@ -250,6 +250,12 @@ CREATE INDEX IF NOT EXISTS idx_scan_failures_unresolved ON scan_failures(source,
             if movie:
                 movie_id = movie["id"]
                 manual = self._manual_fields(movie)
+                # 已绑定来源页重新解析到更正标题时，只在没有人工标题、没有其他来源页且不与现有影片冲突时更新。
+                if source_movie and title != movie["title"] and "title" not in manual:
+                    source_count = db.execute("SELECT COUNT(*) FROM source_entries WHERE movie_id=?", (movie_id,)).fetchone()[0]
+                    title_conflict = db.execute("SELECT 1 FROM movies WHERE normalized_title=? AND id<>?", (normalized, movie_id)).fetchone()
+                    if source_count == 1 and not title_conflict:
+                        db.execute("UPDATE movies SET title=?,normalized_title=?,updated_at=? WHERE id=?", (title, normalized, now, movie_id))
                 updates = {
                     key: (
                         value
