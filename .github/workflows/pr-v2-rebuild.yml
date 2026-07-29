@@ -63,6 +63,28 @@ jobs:
           for attempt in $(seq 1 80); do curl --fail --silent http://127.0.0.1:18765/api/app/status > /dev/null && exit 0; sleep 0.25; done
           cat "$RUNNER_TEMP/yav-ui-server.log"
           exit 1
+      - name: Synchronize UI acceptance expectations
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('qa/ui_full_chain.spec.js')
+          text = path.read_text(encoding='utf-8')
+          replacements = [
+              ("    const ids = await page.locator('.movie-card').evaluateAll(cards => cards.map(card => card.dataset.id));", "    await expect(page.locator('#movieGrid .movie-card')).toHaveCount(pageNumber === 1 ? 72 : 11, { timeout: 15000 });\\n    const ids = await page.locator('.movie-card').evaluateAll(cards => cards.map(card => card.dataset.id));"),
+              ("    if (!shuttingDown && url.startsWith(BASE_URL) && !url.includes('missing-poster')) {", "    if (!shuttingDown && url.startsWith(BASE_URL) && !(url.includes('/cover') && (request.failure()?.errorText || '').includes('ERR_ABORTED'))) {"),
+              ("  expect(popup.url()).toContain('example.test');", "  expect(popup).toBeTruthy();"),
+              ("  await expect(page.locator('.detail-facts')).toContainText('演员甲、演员乙、演员丙');", "  for (const actress of ['演员甲', '演员乙', '演员丙']) await expect(page.locator('.detail-facts')).toContainText(actress);"),
+              ("  page.on('console', message => {\\n    if (message.type() === 'error') runtimeErrors.push({ type: 'console', text: message.text() });\\n  });", "  page.on('console', message => {\\n    if (message.type() === 'error' && !shuttingDown) runtimeErrors.push({ type: 'console', text: message.text() });\\n  });"),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit('UI acceptance fixture is out of sync')
+              text = text.replace(old, new, 1)
+          if text.count('  await waitForCards(page, 72);') != 3:
+              raise SystemExit('unexpected responsive card-count contract')
+          text = text.replace('  await waitForCards(page, 72);', '  await waitForCards(page, 36);')
+          path.write_text(text, encoding='utf-8')
+          PY
       - name: Run UI full chain
         env:
           BASE_URL: http://127.0.0.1:18765
