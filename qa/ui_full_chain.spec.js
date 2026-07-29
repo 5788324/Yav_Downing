@@ -443,6 +443,7 @@ test('Yav V2 全链路 UI、交互、响应式和无障碍验收', async ({ brow
   mark('JPHOO 会话', '登录目标、打开会话、验证登录');
 
   const jphooExisting = page.locator('[data-source-card="jphoo-2"]');
+  page.once('dialog', dialog => dialog.accept());
   await jphooExisting.getByRole('button', { name: '从第 1 页重新扫描' }).click();
   await expect(page.locator('[data-source-card="jphoo-2"]')).toContainText('停止扫描');
   await page.locator('[data-source-card="jphoo-2"]').getByRole('button', { name: '停止扫描' }).click();
@@ -455,6 +456,7 @@ test('Yav V2 全链路 UI、交互、响应式和无障碍验收', async ({ brow
   mark('JPHOO 会话', '关闭会话');
 
   const javdbExisting = page.locator('[data-source-card="javdb-1"]');
+  page.once('dialog', dialog => dialog.accept());
   await javdbExisting.getByRole('button', { name: '从第 1 页重新扫描' }).click();
   await page.locator('[data-source-card="javdb-1"]').getByRole('button', { name: '停止扫描' }).click();
   await page.locator('[data-source-card="javdb-1"]').getByRole('button', { name: '继续扫描' }).click();
