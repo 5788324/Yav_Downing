@@ -139,7 +139,7 @@ async function installSourceMock(page) {
       } else {
         scans[source] = { ...scans[source], series_name: item.name, status: 'running', running: true, current_page: command === 'scan' ? 1 : 3, discovered: 12, processed_count: 8, new_magnets: 4, failures: 0 };
         item.scan_status = 'running';
-        Object.assign(item, scans[source]);
+        Object.assign(item, scans[source], { scan_status: scans[source].status });
       }
       return send(scans[source], 202);
     }
