@@ -70,12 +70,12 @@ jobs:
           path = Path('qa/ui_full_chain.spec.js')
           text = path.read_text(encoding='utf-8')
           replacements = [
-              ("    const ids = await page.locator('.movie-card').evaluateAll(cards => cards.map(card => card.dataset.id));", "    await expect(page.locator('#movieGrid .movie-card')).toHaveCount(pageNumber === 1 ? 72 : 11, { timeout: 15000 });\\n    const ids = await page.locator('.movie-card').evaluateAll(cards => cards.map(card => card.dataset.id));"),
+              ("    const ids = await page.locator('.movie-card').evaluateAll(cards => cards.map(card => card.dataset.id));", "    await expect(page.locator('#movieGrid .movie-card')).toHaveCount(pageNumber === 1 ? 72 : 11, { timeout: 15000 });\n    const ids = await page.locator('.movie-card').evaluateAll(cards => cards.map(card => card.dataset.id));"),
               ("    if (!shuttingDown && url.startsWith(BASE_URL) && !url.includes('missing-poster')) {", "    if (!shuttingDown && url.startsWith(BASE_URL) && !(url.includes('/cover') && (request.failure()?.errorText || '').includes('ERR_ABORTED'))) {"),
               ("  expect(popup.url()).toContain('example.test');", "  expect(popup).toBeTruthy();"),
               ("  await expect(page.locator('.detail-facts')).toContainText('演员甲、演员乙、演员丙');", "  for (const actress of ['演员甲', '演员乙', '演员丙']) await expect(page.locator('.detail-facts')).toContainText(actress);"),
-              ("  await newJavdbCard.getByRole('button', { name: '编辑' }).click();\\n  await javdbForm.locator('[name=\"name\"]').fill('UI 已编辑 JavDB');", "  await newJavdbCard.getByRole('button', { name: '编辑' }).click();\\n  await expect(javdbForm.locator('[data-form-title]')).toContainText('编辑 UI 新增 JavDB');\\n  await javdbForm.locator('[name=\"name\"]').fill('UI 已编辑 JavDB');"),
-              ("  page.on('console', message => {\\n    if (message.type() === 'error') runtimeErrors.push({ type: 'console', text: message.text() });\\n  });", "  page.on('console', message => {\\n    if (message.type() === 'error' && !shuttingDown) runtimeErrors.push({ type: 'console', text: message.text() });\\n  });"),
+              ("  await newJavdbCard.getByRole('button', { name: '编辑' }).click();\n  await javdbForm.locator('[name=\"name\"]').fill('UI 已编辑 JavDB');", "  await newJavdbCard.getByRole('button', { name: '编辑' }).click();\n  await expect(javdbForm.locator('[data-form-title]')).toContainText('编辑 UI 新增 JavDB');\n  await javdbForm.locator('[name=\"name\"]').fill('UI 已编辑 JavDB');"),
+              ("  page.on('console', message => {\n    if (message.type() === 'error') runtimeErrors.push({ type: 'console', text: message.text() });\n  });", "  page.on('console', message => {\n    if (message.type() === 'error' && !shuttingDown) runtimeErrors.push({ type: 'console', text: message.text() });\n  });"),
           ]
           for old, new in replacements:
               if old not in text:
