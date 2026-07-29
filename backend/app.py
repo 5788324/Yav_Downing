@@ -194,8 +194,10 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/":
-            bootstrap = json.dumps({"instanceId": self.runtime.instance_id, "shutdownToken": self.runtime.shutdown_token}, ensure_ascii=False)
-            content = (STATIC_DIR / "index.html").read_text(encoding="utf-8").replace("</body>", f"<script>window.__YAV_BOOTSTRAP__ = {bootstrap};</script></body>")
+            runtime = self.runtime
+            bootstrap = json.dumps({"instanceId": runtime.instance_id if runtime else "", "shutdownToken": runtime.shutdown_token if runtime else ""}, ensure_ascii=False)
+            app_version = (STATIC_DIR / "app.js").stat().st_mtime_ns
+            content = (STATIC_DIR / "index.html").read_text(encoding="utf-8").replace('src="/assets/app.js"', f'src="/assets/app.js?v={app_version}"').replace("</body>", f"<script>window.__YAV_BOOTSTRAP__ = {bootstrap};</script></body>")
             payload = content.encode("utf-8")
             self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(payload))); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(payload)
             return

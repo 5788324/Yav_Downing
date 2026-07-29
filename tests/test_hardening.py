@@ -120,6 +120,10 @@ class ApiTests(unittest.TestCase):
         for value in ("false", 0, None):
             self.assertEqual(self.request("POST", f"/api/movies/{self.movie}/favorite", {"favorite":value})[0], 400)
 
+    def test_index_uses_versioned_app_script_url(self):
+        with urlopen(self.base + "/", timeout=3) as response:
+            self.assertIn(b"/assets/app.js?v=", response.read())
+
     def test_frontend_assets_are_not_cached_after_local_restart(self):
         with urlopen(self.base + "/assets/app.js", timeout=3) as response:
             self.assertEqual(response.headers.get("Cache-Control"), "no-store")
