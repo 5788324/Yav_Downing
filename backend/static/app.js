@@ -210,8 +210,10 @@ async function toggleFavorite(id, nextValue, button) {
     $('#navFavorites').textContent = $('#statFavorites').textContent;
     if (state.quick === 'favorite' && !result.favorite) loadMovies();
     showToast(result.favorite ? '已加入收藏' : '已取消收藏');
+    return result;
   } catch (error) {
     showToast(error.message);
+    return null;
   } finally {
     button.disabled = false;
   }
@@ -419,8 +421,9 @@ document.addEventListener('keydown', event => { if (event.key !== 'Escape') retu
     }
     const favorite = event.target.closest('#detailFavorite');
     if (favorite && state.currentMovie) {
-      toggleFavorite(state.currentMovie.id, !state.currentMovie.favorite, favorite).then(() => {
-        favorite.textContent = state.currentMovie.favorite ? '♥ 已收藏' : '♡ 加入收藏';
+      const movieId = state.currentMovie.id;
+      toggleFavorite(movieId, !state.currentMovie.favorite, favorite).then(result => {
+        if (result && state.currentMovie?.id === movieId && favorite.isConnected) favorite.textContent = result.favorite ? '♥ 已收藏' : '♡ 加入收藏';
       });
     }
   });
@@ -471,14 +474,17 @@ function sourceCard(item, sessionLogin = 'ready', appProfile = '') {
   const legacyProfile = item.source === 'jphoo' && item.profile_dir && item.profile_dir !== appProfile ? '<br><small class="source-hint">旧版系列 Profile 已不再使用；当前统一使用上方应用 Profile。</small>' : '';
   return `<article class="source-card" data-source-card="${item.source}-${item.id}"><div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.url)}</p><small>${item.enabled ? '已启用' : '已停用'} · ${stats}${item.last_error ? ` · ${escapeHtml(item.last_error)}` : ''}</small>${legacyProfile}</div><div class="source-actions">${sourceButtons(item, sessionLogin)}</div></article>`;
 }
+function loginDisplayState(login = {}) { const status=String(login.status || ''); const stable=String(login.login || ''); return ['opening','checking','closing'].includes(status) ? status : (status || stable || 'unknown'); }
 function sourceForm(source, label) {
   return `<form class="source-form" data-source-form="${source}"><h3 data-form-title>添加 ${label} 系列</h3><input name="name" placeholder="系列名称" required><input name="url" type="url" placeholder="${label} 系列网址" required><label class="source-check"><input name="enabled" type="checkbox" checked> 启用此系列</label><div><button type="submit">保存系列</button><button type="button" data-cancel-edit hidden>取消编辑</button></div></form>`;
 }
 async function sourcePanel(source, label) {
   const [rows, scan, login] = await Promise.all([request(`/api/sources/${source}`), request(`/api/sources/${source}/scan`), source === 'jphoo' ? request('/api/sources/jphoo/login') : Promise.resolve({})]);
-  const loginCard = source === 'jphoo' ? `<section class="source-status-card"><h3>JPHOO 会话：<span data-login-state>${escapeHtml(login.login || login.status || 'unknown')}</span></h3><p>统一 Profile：${escapeHtml(login.profile_dir || '正在读取')}<br>目标域名：${escapeHtml(login.target_origin || '请选择系列')}<br>浏览器会话：${login.window_open ? '已打开' : '未打开'} · 最后验证：${escapeHtml(login.last_verified_at || '未验证')}</p><label>登录目标<select id="jphooLoginSeries">${rows.filter(item => item.enabled).map(item => `<option value="${item.id}">${escapeHtml(item.name)} · ${escapeHtml(item.url)}</option>`).join('') || '<option value="">请先添加并启用系列</option>'}</select></label><button data-login="open">打开/恢复会话</button><button data-login="check" ${login.window_open ? '' : 'disabled'}>验证登录</button><button data-login="close" ${login.window_open ? '' : 'disabled'}>关闭会话</button></section>` : '';
+  const loginState = loginDisplayState(login);
+  const currentRows = rows.map(item => (item.id === scan.series_id && ['starting','running','stopping'].includes(scan.status)) ? {...item, ...scan, scan_status: scan.status} : item);
+  const loginCard = source === 'jphoo' ? `<section class="source-status-card"><h3>JPHOO 会话：<span data-login-state>${escapeHtml(loginState)}</span></h3><p>统一 Profile：${escapeHtml(login.profile_dir || '正在读取')}<br>目标域名：${escapeHtml(login.target_origin || '请选择系列')}<br>浏览器会话：${login.window_open ? '已打开' : '未打开'} · 最后验证：${escapeHtml(login.last_verified_at || '未验证')}</p><label>登录目标<select id="jphooLoginSeries">${currentRows.filter(item => item.enabled).map(item => `<option value="${item.id}">${escapeHtml(item.name)} · ${escapeHtml(item.url)}</option>`).join('') || '<option value="">请先添加并启用系列</option>'}</select></label><button data-login="open">打开/恢复会话</button><button data-login="check" ${login.window_open ? '' : 'disabled'}>验证登录</button><button data-login="close" ${login.window_open ? '' : 'disabled'}>关闭会话</button></section>` : '';
   const scanText = `当前扫描：${escapeHtml(scan.series_name || '无')} · 来源：${escapeHtml(scan.source || source)} · 状态：${escapeHtml(scan.status || 'idle')} · 当前页：${scan.current_page || scan.page || 0} · 发现：${scan.discovered || 0} · 处理：${scan.processed_count || scan.processed || 0} · 新磁链：${scan.new_magnets || 0} · 失败：${scan.failures || 0}`;
-  return `<section class="source-section" data-source-section="${source}">${source === 'javdb' ? '<h2 id="sourcesTitle">来源管理</h2>' : ''}<h3>${label}</h3>${loginCard}<section class="source-status-card" data-scan-status="${source}">${scanText}</section>${sourceForm(source,label)}<div class="source-cards">${rows.map(item => sourceCard(item, login.login || 'unknown', login.profile_dir || '')).join('') || `<p class="source-empty">尚未配置 ${label} 系列。</p>`}</div></section>`;
+  return `<section class="source-section" data-source-section="${source}">${source === 'javdb' ? '<h2 id="sourcesTitle">来源管理</h2>' : ''}<h3>${label}</h3>${loginCard}<section class="source-status-card" data-scan-status="${source}">${scanText}</section>${sourceForm(source,label)}<div class="source-cards">${currentRows.map(item => sourceCard(item, login.login || 'unknown', login.profile_dir || '')).join('') || `<p class="source-empty">尚未配置 ${label} 系列。</p>`}</div></section>`;
 }
 function sourcePanelError(label, error) { return `<section class="source-section"><h3>${label}</h3><p class="source-error">${escapeHtml(error.message || '来源状态读取失败')}</p></section>`; }
 async function renderSources() {
@@ -498,7 +504,7 @@ async function refreshSourceStatuses() {
     const login = !$('#sourceOverlay').hidden ? await request('/api/sources/jphoo/login') : null;
     sourceStatusFailures = 0;
     const transition = reconcileScanStates(sourceScanStates, scans); Object.assign(sourceScanStates, transition.next);
-    const loginPolling = login && new Set(['opening','checking','closing','window_open']).has(login.login || login.status);
+    const loginPolling = login && (new Set(['opening','checking','closing','window_open']).has(login.status) || new Set(['opening','checking','closing','window_open']).has(login.login));
     if (transition.refreshLibrary) await Promise.all([loadFilters(), loadMovies({ silent: true })]);
     if ((transition.stoppedSources.length || loginPolling) && !$('#sourceOverlay').hidden) await renderSources();
     if (!Object.values(transition.next).some(Boolean) && !loginPolling) { clearInterval(sourcePollTimer); sourcePollTimer = null; }
@@ -528,7 +534,7 @@ $('#sourceContent').addEventListener('submit', event => {
 $('#sourceContent').addEventListener('click', event => {
   const button = event.target.closest('button'); if (!button) return;
   const source = button.dataset.source;
-if (button.dataset.login) { const series=$('#jphooLoginSeries'); const payload=button.dataset.login === 'open' ? {series_id:Number(series?.value || 0)} : {}; return sourceAction(button, () => request(`/api/sources/jphoo/login/${button.dataset.login}`, {method:'POST',body:JSON.stringify(payload)})); }
+if (button.dataset.login) { const series=$('#jphooLoginSeries'); const payload=button.dataset.login === 'open' ? {series_id:Number(series?.value || 0)} : {}; return sourceAction(button, async () => { await request(`/api/sources/jphoo/login/${button.dataset.login}`, {method:'POST',body:JSON.stringify(payload)}); ensureSourcePolling(); }); }
   if (button.hasAttribute('data-cancel-edit')) { const form=button.closest('form'); form.reset(); delete form.dataset.editId; button.hidden=true; form.querySelector('[data-form-title]').textContent=`添加 ${form.dataset.sourceForm === 'jphoo' ? 'JPHOO' : 'JavDB'} 系列`; return; }
   if (!source) return;
   if (button.dataset.edit) return request(`/api/sources/${source}`).then(rows => { const item=rows.find(row=>String(row.id)===button.dataset.edit); const form=$(`[data-source-form="${source}"]`); form.dataset.editId=item.id; form.name.value=item.name; form.url.value=item.url; form.enabled.checked=Boolean(item.enabled); if(form.profile_dir) form.profile_dir.value=item.profile_dir||''; form.querySelector('[data-form-title]').textContent=`编辑 ${item.name}`; form.querySelector('[data-cancel-edit]').hidden=false; form.scrollIntoView({behavior:'smooth',block:'center'}); }).catch(error => showToast(error.message));

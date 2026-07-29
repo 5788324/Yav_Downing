@@ -177,12 +177,47 @@ CREATE INDEX IF NOT EXISTS idx_scan_failures_unresolved ON scan_failures(source,
                     db.execute(statement)
                 except sqlite3.OperationalError:
                     pass
+            version_row = db.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()
+            previous_version = int(version_row[0]) if version_row and str(version_row[0]).isdigit() else 1
+            if previous_version < 4:
+                self._migrate_btih_to_v4(db)
             db.execute("UPDATE schema_meta SET value='4' WHERE key='schema_version'")
             db.execute("UPDATE scan_runs SET status='interrupted', finished_at=? WHERE status IN ('starting','running','stopping')", (self.now(),))
             invalid = tuple(sorted(INVALID_METADATA_VALUES))
             placeholders = ",".join("?" for _ in invalid)
             db.execute(f"DELETE FROM movie_actresses WHERE actress_id IN (SELECT id FROM actresses WHERE name IN ({placeholders})) AND movie_id IN (SELECT id FROM movies WHERE manual_fields NOT LIKE '%\"actresses\"%')", invalid)
             db.execute("DELETE FROM actresses WHERE NOT EXISTS (SELECT 1 FROM movie_actresses WHERE movie_actresses.actress_id=actresses.id)")
+
+    @staticmethod
+    def _migrate_btih_to_v4(db: sqlite3.Connection) -> None:
+        """将 schema 3 的历史 BTIH 规范化；无效值保留，跨影片只留给审计报告。"""
+        before = db.execute("PRAGMA integrity_check").fetchone()[0]
+        if before != "ok":
+            raise RuntimeError(f"BTIH 迁移前数据库完整性检查失败：{before}")
+        groups: dict[tuple[int, str], list[sqlite3.Row]] = {}
+        for row in db.execute("SELECT id,movie_id,btih,size_bytes,discovered_at FROM magnets ORDER BY discovered_at,id"):
+            try:
+                canonical = normalize_btih(row["btih"])
+            except ValueError:
+                continue
+            groups.setdefault((row["movie_id"], canonical), []).append(row)
+        for (movie_id, canonical), rows in groups.items():
+            keeper = rows[0]
+            keeper_id = keeper["id"]
+            valid_sizes = [row["size_bytes"] for row in rows if row["size_bytes"] and row["size_bytes"] > 0]
+            size = max(valid_sizes) if valid_sizes else None
+            earliest = min((row["discovered_at"] or "") for row in rows)
+            for duplicate in rows[1:]:
+                for source in db.execute("SELECT source_entry_id FROM magnet_sources WHERE magnet_id=?", (duplicate["id"],)):
+                    db.execute("INSERT OR IGNORE INTO magnet_sources(magnet_id,source_entry_id) VALUES(?,?)", (keeper_id, source["source_entry_id"]))
+                db.execute("DELETE FROM magnets WHERE id=?", (duplicate["id"],))
+            db.execute(
+                "UPDATE magnets SET btih=?,size_bytes=?,discovered_at=? WHERE id=? AND movie_id=?",
+                (canonical, size, earliest, keeper_id, movie_id),
+            )
+        after = db.execute("PRAGMA integrity_check").fetchone()[0]
+        if after != "ok":
+            raise RuntimeError(f"BTIH 迁移后数据库完整性检查失败：{after}")
 
     @staticmethod
     def now() -> str:
@@ -747,6 +782,8 @@ CREATE INDEX IF NOT EXISTS idx_scan_failures_unresolved ON scan_failures(source,
                 if url_changed:
                     now = self.now()
                     db.execute("UPDATE scan_failures SET resolved_at=?,updated_at=?,last_error='superseded: source URL changed' WHERE source=? AND series_id=? AND resolved_at=''", (now, now, source, series_id))
+                    # 保留旧运行历史，但给新网址建立零统计的当前状态，避免卡片误报旧网址进度。
+                    db.execute("INSERT INTO scan_runs(series_id,status,started_at,finished_at,message) VALUES(?,?,?,?,?)", (series_id, "idle", now, now, "source URL changed"))
                 return int(series_id)
             try:
                 return db.execute("INSERT INTO source_series(source,name,url,enabled,profile_dir) VALUES(?,?,?,?,?)", (source,name,url,int(enabled),profile_dir or "")).lastrowid

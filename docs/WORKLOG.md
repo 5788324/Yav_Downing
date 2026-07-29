@@ -264,3 +264,5 @@
 - 将 Playwright 的分页、来源扫描文案、确认框和模拟响应字段更新为与当前 UI/API 契约一致；删除 CI 对测试文件的动态改写。
 - 本机完整 Playwright：1 passed（1.1 分钟）；Python 64 项、Node 2 项通过。GitHub Actions run 30468450208：四组 Python、Playwright UI、Windows PyInstaller 冒烟全部通过。
 - 未提交数据库、封面、Cookie、日志、截图或 node_modules；未合并、未发布。
+
+- 2026-07-30：RC 小型回归修复。增加临时 schema 3 数据库迁移测试，确认等价 BTIH 合并后来源关系、有效大小和最早发现时间保留，非法 BTIH 不删除；本地 65 项测试、JS 检查和扫描状态测试通过。

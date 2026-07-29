@@ -119,3 +119,5 @@
 - JPHOO `starting` 与立即停止竞态已收紧；来源 URL 变更会重置断点并隔离旧失败 URL。
 - UI 全链路测试改为正式版本控制，不再由 CI 动态改写；本机 Playwright 及 GitHub Ubuntu/Windows 矩阵、Windows PyInstaller 冒烟均通过。
 - Draft PR 仍未合并或发布；尚未完成 2.0.2 RC 发布决策。
+
+- 2026-07-30：Draft PR #6 补齐 schema 3→4 的历史 BTIH 规范化：同片 Base32/hex 碰撞合并来源关系，非法值保留供审计；JPHOO 来源卡片采用内存扫描状态，登录轮询同时判断 status/login，并补强 pending scan 停止检查。

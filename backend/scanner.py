@@ -311,7 +311,20 @@ class JphooSessionManager:
             self.browser.close()
         self.browser = None
         self.scanner = None
+        self.scan_stop_requested.clear()
+        self.close_after_scan.clear()
+        self.shutdown_requested.clear()
         self._set(status="closed", login="unknown", session_state="closed", window_open=False, scanning=False, close_after_scan=False)
+    def _abort_pending_scan(self):
+        if self.close_after_scan.is_set() or self.shutdown_requested.is_set():
+            shutting_down = self.shutdown_requested.is_set()
+            self._close_browser()
+            return "shutdown" if shutting_down else "closed"
+        if self.scan_stop_requested.is_set():
+            self.scan_stop_requested.clear()
+            self._set(status="stopped", scanning=False, close_after_scan=False)
+            return "stopped"
+        return ""
     def _worker(self):
         from .sources.jphoo import JphooSource
         while True:
@@ -334,6 +347,9 @@ class JphooSessionManager:
                         self.browser = None
                         self._set(status="closed", login="unknown", session_state="closed", window_open=False, scanning=False)
                 elif command == "scan":
+                    aborted = self._abort_pending_scan()
+                    if aborted == "shutdown": return
+                    if aborted: continue
                     if self.scan_stop_requested.is_set():
                         self.scan_stop_requested.clear()
                         self._set(status="stopped", scanning=False)
@@ -355,6 +371,9 @@ class JphooSessionManager:
                         self._set(status="stopped", scanning=False)
                         continue
                     self.scanner = JphooScanner(self.database, self.profile_dir, source=JphooSource(browser=browser))
+                    aborted = self._abort_pending_scan()
+                    if aborted == "shutdown": return
+                    if aborted: self.scanner = None; continue
                     self._set(status="running", scanning=True, series_id=series["id"], series_name=series["name"], source=self.source_name)
                     result = self.scanner.run(series["id"], payload["from_start"])
                     self.scanner = None

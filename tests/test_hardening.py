@@ -184,3 +184,33 @@ class FrontendStaticTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class BtihSchemaMigrationTests(unittest.TestCase):
+    def test_schema_three_merges_equivalent_btih_and_preserves_sources(self):
+        import base64
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "library.db"
+            db = LibraryDatabase(path)
+            movie = db.add_or_update_movie("BTIH-001", source="javdb", source_url="https://x/j")
+            db.add_or_update_movie("BTIH-001", source="jphoo", source_url="https://x/p")
+            hex_btih = "0123456789ABCDEF0123456789ABCDEF01234567"
+            base32_btih = base64.b32encode(bytes.fromhex(hex_btih)).decode("ascii")
+            with db.connect() as c:
+                c.execute("UPDATE schema_meta SET value='3' WHERE key='schema_version'")
+                left = c.execute("INSERT INTO magnets(movie_id,magnet,btih,size_bytes,discovered_at) VALUES(?,?,?,?,?)", (movie, "magnet:?xt=urn:btih:" + hex_btih, hex_btih.lower(), 10, "2020-01-02" )).lastrowid
+                right = c.execute("INSERT INTO magnets(movie_id,magnet,btih,size_bytes,discovered_at) VALUES(?,?,?,?,?)", (movie, "magnet:?xt=urn:btih:" + base32_btih, base32_btih.lower(), 20, "2020-01-01" )).lastrowid
+                entries = c.execute("SELECT id FROM source_entries ORDER BY id").fetchall()
+                c.execute("INSERT INTO magnet_sources VALUES(?,?)", (left, entries[0][0]))
+                c.execute("INSERT INTO magnet_sources VALUES(?,?)", (right, entries[1][0]))
+                c.execute("INSERT INTO magnets(movie_id,magnet,btih,size_bytes,discovered_at) VALUES(?,?,?,?,?)", (movie, "broken", "not-a-btih", None, "2020-01-03"))
+            reopened = LibraryDatabase(path)
+            with reopened.connect() as c:
+                rows = c.execute("SELECT btih,size_bytes,discovered_at FROM magnets WHERE movie_id=? ORDER BY id", (movie,)).fetchall()
+                self.assertEqual(rows[0][0], hex_btih)
+                self.assertEqual((rows[0][1], rows[0][2]), (20, "2020-01-01"))
+                self.assertEqual(c.execute("SELECT COUNT(*) FROM magnet_sources WHERE magnet_id=(SELECT id FROM magnets WHERE btih=?)", (hex_btih,)).fetchone()[0], 2)
+                self.assertEqual(c.execute("SELECT COUNT(*) FROM magnets WHERE btih='not-a-btih'").fetchone()[0], 1)
+                self.assertEqual(c.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+            LibraryDatabase(path)
+            with reopened.connect() as c:
+                self.assertEqual(c.execute("SELECT COUNT(*) FROM magnets WHERE movie_id=?", (movie,)).fetchone()[0], 2)

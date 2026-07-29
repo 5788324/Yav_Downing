@@ -1,17 +1,32 @@
 """Yav V2 只读完整性审计。"""
 from __future__ import annotations
-import argparse, json, sqlite3
+import argparse, json, re, sqlite3
 from pathlib import Path
-from .db import INVALID_METADATA_VALUES
+from .db import is_invalid_metadata, normalize_btih
 
 def audit(path: str | Path) -> dict:
     db_path = Path(path).resolve()
     connection = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
     try:
-        duplicate = connection.execute("SELECT btih,COUNT(*) amount,GROUP_CONCAT(movie_id) movie_ids FROM magnets GROUP BY btih HAVING COUNT(*)>1").fetchall()
-        marks = ",".join("?" for _ in INVALID_METADATA_VALUES)
-        invalid = connection.execute(f"SELECT m.id,m.title,m.manual_fields,a.name FROM movies m JOIN movie_actresses ma ON ma.movie_id=m.id JOIN actresses a ON a.id=ma.actress_id WHERE a.name IN ({marks})", tuple(INVALID_METADATA_VALUES)).fetchall()
-        return {"movies": connection.execute("SELECT COUNT(*) FROM movies").fetchone()[0], "magnets": connection.execute("SELECT COUNT(*) FROM magnets").fetchone()[0], "cross_movie_duplicate_btih": [{"btih":r[0],"amount":r[1],"movie_ids":r[2]} for r in duplicate], "invalid_actresses": [{"movie_id":r[0],"title":r[1],"manual_fields":r[2],"name":r[3]} for r in invalid]}
+        raw = connection.execute("SELECT id,movie_id,btih FROM magnets").fetchall()
+        normalized: dict[str, list[sqlite3.Row]] = {}
+        hex40 = base32 = invalid_btih = 0
+        for row in raw:
+            value = row["btih"] or ""
+            if re.fullmatch(r"[0-9a-fA-F]{40}", value): hex40 += 1
+            elif re.fullmatch(r"[A-Za-z2-7]{32}", value): base32 += 1
+            else: invalid_btih += 1
+            try: normalized.setdefault(normalize_btih(value), []).append(row)
+            except ValueError: pass
+        same_movie, cross_movie = [], []
+        for btih, rows in normalized.items():
+            movie_ids = sorted({row["movie_id"] for row in rows})
+            if len(rows) > 1 and len(movie_ids) == 1: same_movie.append({"btih": btih, "amount": len(rows), "movie_ids": movie_ids})
+            if len(movie_ids) > 1: cross_movie.append({"btih": btih, "amount": len(rows), "movie_ids": movie_ids})
+        actresses = connection.execute("SELECT m.id,m.title,m.manual_fields,a.name FROM movies m JOIN movie_actresses ma ON ma.movie_id=m.id JOIN actresses a ON a.id=ma.actress_id").fetchall()
+        invalid = [row for row in actresses if is_invalid_metadata(row["name"])]
+        return {"movies": connection.execute("SELECT COUNT(*) FROM movies").fetchone()[0], "magnets": len(raw), "btih_40_hex": hex40, "btih_32_base32": base32, "invalid_btih": invalid_btih, "same_movie_normalized_duplicate_btih": same_movie, "cross_movie_normalized_duplicate_btih": cross_movie, "cross_movie_duplicate_btih": cross_movie, "invalid_actresses": [{"movie_id":r["id"],"title":r["title"],"manual_fields":r["manual_fields"],"name":r["name"]} for r in invalid]}
     finally: connection.close()
 
 def main():
