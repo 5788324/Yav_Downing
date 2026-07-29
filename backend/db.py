@@ -178,7 +178,7 @@ CREATE INDEX IF NOT EXISTS idx_scan_failures_unresolved ON scan_failures(source,
                 except sqlite3.OperationalError:
                     pass
             db.execute("UPDATE schema_meta SET value='4' WHERE key='schema_version'")
-            db.execute("UPDATE scan_runs SET status='interrupted', finished_at=? WHERE status IN ('running','stopping')", (self.now(),))
+            db.execute("UPDATE scan_runs SET status='interrupted', finished_at=? WHERE status IN ('starting','running','stopping')", (self.now(),))
             invalid = tuple(sorted(INVALID_METADATA_VALUES))
             placeholders = ",".join("?" for _ in invalid)
             db.execute(f"DELETE FROM movie_actresses WHERE actress_id IN (SELECT id FROM actresses WHERE name IN ({placeholders})) AND movie_id IN (SELECT id FROM movies WHERE manual_fields NOT LIKE '%\"actresses\"%')", invalid)
@@ -716,7 +716,7 @@ CREATE INDEX IF NOT EXISTS idx_scan_failures_unresolved ON scan_failures(source,
 
     def is_source_series_scanning(self, series_id, source):
         with self.connect() as db:
-            row = db.execute("SELECT 1 FROM scan_runs sr JOIN source_series ss ON ss.id=sr.series_id WHERE sr.series_id=? AND ss.source=? AND sr.status IN ('running','stopping') ORDER BY sr.id DESC LIMIT 1", (series_id, source)).fetchone()
+            row = db.execute("SELECT 1 FROM scan_runs sr JOIN source_series ss ON ss.id=sr.series_id WHERE sr.series_id=? AND ss.source=? AND sr.status IN ('starting','running','stopping') ORDER BY sr.id DESC LIMIT 1", (series_id, source)).fetchone()
             return bool(row)
     def set_scan_stopping(self, series_id, source):
         with self.connect() as db:
@@ -734,14 +734,19 @@ CREATE INDEX IF NOT EXISTS idx_scan_failures_unresolved ON scan_failures(source,
         profile_dir = None if profile_dir is None else str(profile_dir).strip()
         with self.connect() as db:
             if series_id:
-                row = db.execute("SELECT 1 FROM source_series WHERE id=? AND source=?", (series_id, source)).fetchone()
+                row = db.execute("SELECT * FROM source_series WHERE id=? AND source=?", (series_id, source)).fetchone()
                 if not row: raise ValueError("来源系列不存在")
-                if db.execute("SELECT 1 FROM scan_runs WHERE series_id=? AND status IN ('running','stopping')", (series_id,)).fetchone():
+                if db.execute("SELECT 1 FROM scan_runs WHERE series_id=? AND status IN ('starting','running','stopping')", (series_id,)).fetchone():
                     raise ValueError("该系列正在扫描，不能修改网址或启用状态")
+                url_changed = row["url"] != url
+                checkpoint = 0 if url_changed else row["last_completed_page"]
                 if profile_dir is None:
-                    db.execute("UPDATE source_series SET name=?,url=?,enabled=? WHERE id=? AND source=?", (name,url,int(enabled),series_id,source))
+                    db.execute("UPDATE source_series SET name=?,url=?,enabled=?,last_completed_page=? WHERE id=? AND source=?", (name,url,int(enabled),checkpoint,series_id,source))
                 else:
-                    db.execute("UPDATE source_series SET name=?,url=?,enabled=?,profile_dir=? WHERE id=? AND source=?", (name,url,int(enabled),profile_dir,series_id,source))
+                    db.execute("UPDATE source_series SET name=?,url=?,enabled=?,profile_dir=?,last_completed_page=? WHERE id=? AND source=?", (name,url,int(enabled),profile_dir,checkpoint,series_id,source))
+                if url_changed:
+                    now = self.now()
+                    db.execute("UPDATE scan_failures SET resolved_at=?,updated_at=?,last_error='superseded: source URL changed' WHERE source=? AND series_id=? AND resolved_at=''", (now, now, source, series_id))
                 return int(series_id)
             try:
                 return db.execute("INSERT INTO source_series(source,name,url,enabled,profile_dir) VALUES(?,?,?,?,?)", (source,name,url,int(enabled),profile_dir or "")).lastrowid

@@ -2,7 +2,7 @@ export function reconcileScanStates(previous, scans) {
   const next = { ...previous };
   const stoppedSources = [];
   for (const [source, scan] of Object.entries(scans)) {
-    const active = scan.status === 'running' || scan.status === 'stopping';
+    const active = new Set(['starting', 'running', 'stopping']).has(scan.status);
     if (previous[source] && !active) stoppedSources.push(source);
     next[source] = active;
   }

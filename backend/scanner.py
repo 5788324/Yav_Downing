@@ -179,7 +179,7 @@ class JphooSessionManager:
         self.browser_factory = browser_factory
         self.queue, self.thread, self.browser, self.scanner = Queue(), None, None, None
         self.lock, self.probe_pending = RLock(), Event()
-        self.close_after_scan, self.shutdown_requested = Event(), Event()
+        self.close_after_scan, self.shutdown_requested, self.scan_stop_requested = Event(), Event(), Event()
         self.series_id = None
         self.result = {"status": "closed", "login": "unknown", "session_state": "closed", "profile_dir": self.profile_dir, "window_open": False}
 
@@ -260,14 +260,16 @@ class JphooSessionManager:
                 raise ValueError("请先打开会话并验证 JPHOO 登录状态")
             # 先保留 starting 状态，再把命令交给会话线程，避免重复点击在 scanner 创建前排入两次。
             self.series_id = series_id
+            self.scan_stop_requested.clear()
             self.result.update(status="starting", series_id=series_id, series_name=series["name"], source=self.source_name, scanning=True)
         self._post("scan", series_id=series_id, from_start=from_start)
         return self.status()
     def stop(self, series_id=None):
         if series_id is not None and self.series_id is not None and int(series_id) != self.series_id:
             raise ValueError("请求的系列不是当前正在扫描的系列")
+        self.scan_stop_requested.set()
         scanner = self.scanner
-        self._set(status="stopping", scanning=bool(scanner))
+        self._set(status="stopping", scanning=True)
         if self.series_id:
             self.database.set_scan_stopping(self.series_id, self.source_name)
         if scanner:
@@ -284,9 +286,11 @@ class JphooSessionManager:
             self._post("probe")
         data = self._snapshot()
         latest = self.database.latest_scan_status(self.source_name)
-        if latest and (self.scanner or data.get("status") in {"starting", "running", "stopping"}):
-            data.update(latest)
-        data["running"] = bool(self.scanner)
+        if latest and self.scanner:
+            for key, value in latest.items():
+                if key not in {"status", "running", "series_id", "series_name", "source"}:
+                    data[key] = value
+        data["running"] = bool(data.get("scanning"))
         data["profile_dir"] = self.profile_dir
         return data
 
@@ -330,6 +334,10 @@ class JphooSessionManager:
                         self.browser = None
                         self._set(status="closed", login="unknown", session_state="closed", window_open=False, scanning=False)
                 elif command == "scan":
+                    if self.scan_stop_requested.is_set():
+                        self.scan_stop_requested.clear()
+                        self._set(status="stopped", scanning=False)
+                        continue
                     if self.close_after_scan.is_set() or self.shutdown_requested.is_set():
                         self._close_browser()
                         if self.shutdown_requested.is_set():
@@ -342,6 +350,10 @@ class JphooSessionManager:
                     if diagnostic["login"] != "ready":
                         self._set(status="login_required" if diagnostic["login"] == "login_required" else "unknown", scanning=False)
                         continue
+                    if self.scan_stop_requested.is_set():
+                        self.scan_stop_requested.clear()
+                        self._set(status="stopped", scanning=False)
+                        continue
                     self.scanner = JphooScanner(self.database, self.profile_dir, source=JphooSource(browser=browser))
                     self._set(status="running", scanning=True, series_id=series["id"], series_name=series["name"], source=self.source_name)
                     result = self.scanner.run(series["id"], payload["from_start"])
@@ -352,6 +364,7 @@ class JphooSessionManager:
                             return
                         self.close_after_scan.clear()
                         continue
+                    self.scan_stop_requested.clear()
                     details = {key: value for key, value in result.items() if key != "status"}
                     self._set(**details, scanning=False, status=result["status"], login="login_required" if result["status"] == "login_required" else self._snapshot().get("login", "unknown"))
                 elif command in {"close", "shutdown"}:
