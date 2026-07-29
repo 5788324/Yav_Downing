@@ -133,3 +133,14 @@ class ScanManagerSafetyTests(unittest.TestCase):
    with self.assertRaisesRegex(ValueError,'已有扫描'): manager.start(two)
    with self.assertRaisesRegex(ValueError,'不是当前'): manager.stop(two)
    manager.stop(one); self.assertTrue(manager.shutdown(1))
+class FullScanCheckpointTests(unittest.TestCase):
+ def test_from_start_resets_old_checkpoint_before_first_page(self):
+  with tempfile.TemporaryDirectory() as d:
+   db=LibraryDatabase(Path(d)/'library.db'); sid=db.save_source_series('Series','https://x/series')
+   with db.connect() as c: c.execute('UPDATE source_series SET last_completed_page=38 WHERE id=?',(sid,))
+   scanner=JavdbScanner(db); _series,page,_run=scanner._begin(sid,True)
+   self.assertEqual(page,1)
+   self.assertEqual(db.get_source_series(sid,'javdb')['last_completed_page'],0)
+   scanner.stop(); scanner._finish(sid,_run,page,scanner._stats(),'stopped')
+   resumed=JavdbScanner(db); _series,page,_run=resumed._begin(sid,False)
+   self.assertEqual(page,1)

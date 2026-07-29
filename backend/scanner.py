@@ -18,7 +18,12 @@ class BaseScanner:
             series = db.execute("SELECT * FROM source_series WHERE id=? AND source=?", (series_id, self.source_name)).fetchone()
             if not series: raise ValueError(f"{self.source_name} 系列不存在")
             if not series["enabled"]: raise ValueError("该系列已停用，不能启动扫描")
-            page = 1 if from_start else max(1, series["last_completed_page"] + 1)
+            if from_start:
+                # 全量扫描的断点从确认启动时清零；若马上停止，继续仍会回到第 1 页。
+                db.execute("UPDATE source_series SET last_completed_page=0 WHERE id=?", (series_id,))
+                page = 1
+            else:
+                page = max(1, series["last_completed_page"] + 1)
             run_id = db.execute("INSERT INTO scan_runs(series_id,status,started_at) VALUES(?,?,?)", (series_id, "running", self.db.now())).lastrowid
         return series, page, run_id
     def _save_progress(self, series_id, run_id, page, stats, last_error="", page_completed=False):
