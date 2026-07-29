@@ -266,7 +266,7 @@ class Handler(BaseHTTPRequestHandler):
                 result=self.scans.stop(series_id) if action == "stop" else self.scans.start(series_id, action == "scan")
                 self._json(result, 202)
             except (ValueError, TypeError) as exc:
-                self._json({"error":str(exc)},400)
+                self._json({"error":str(exc)}, 409 if action == "stop" and "不是当前" in str(exc) else 400)
             return
 
         login_action = re.fullmatch(r"/api/sources/jphoo/login/(open|check|close)", urlparse(self.path).path)
@@ -287,21 +287,21 @@ class Handler(BaseHTTPRequestHandler):
                 action,series_id=jphoo_action.group(2),int(jphoo_action.group(1))
                 self._json(self.jphoo_scans.stop(series_id) if action == "stop" else self.jphoo_scans.start(series_id, action == "scan"), 202)
             except (ValueError, TypeError) as exc:
-                self._json({"error":str(exc)},400)
+                self._json({"error":str(exc)}, 409 if action == "stop" and "不是当前" in str(exc) else 400)
             return
 
         if urlparse(self.path).path == "/api/sources/jphoo":
             try:
                 payload=self._source_payload(self._read_json(), "jphoo"); self._json({"id": self.database.save_source_series(**payload)}, 201)
             except (ValueError, TypeError) as exc:
-                self._json({"error":str(exc)}, 400)
+                self._json({"error":str(exc)}, 409 if "已经存在" in str(exc) or "正在扫描" in str(exc) else 400)
             return
 
         if urlparse(self.path).path == "/api/sources/javdb":
             try:
                 self._json({"id": self.database.save_source_series(**self._source_payload(self._read_json(), "javdb"))}, 201)
             except (ValueError, TypeError) as exc:
-                self._json({"error": str(exc)}, 400)
+                self._json({"error": str(exc)}, 409 if "已经存在" in str(exc) or "正在扫描" in str(exc) else 400)
             return
 
         match = re.fullmatch(r"/api/movies/(\d+)/favorite", urlparse(self.path).path)

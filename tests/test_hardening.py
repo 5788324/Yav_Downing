@@ -100,6 +100,10 @@ class ApiTests(unittest.TestCase):
     def test_source_edit_delete_and_favorite_validation(self):
         status, javdb = self.request("POST", "/api/sources/javdb", {"name":"J","url":"https://x/j","enabled":True,"scan_status":"bad"})
         self.assertEqual(status, 201)
+        self.assertEqual(self.request("POST", "/api/sources/javdb", {"name":"J-copy","url":"https://x/j","enabled":True})[0], 409)
+        other = self.request("POST", "/api/sources/javdb", {"name":"Other","url":"https://x/other","enabled":True})[1]
+        Handler.scans.series_id = javdb["id"]
+        self.assertEqual(self.request("POST", f'/api/sources/javdb/{other["id"]}/stop', {})[0], 409)
         status, _ = self.request("POST", "/api/sources/javdb", {"series_id":javdb["id"],"name":"J2","url":"https://x/j2","enabled":False,"new_magnets":99})
         self.assertEqual(status, 201)
         self.assertEqual(self.db.get_source_series(javdb["id"], "javdb")["name"], "J2")

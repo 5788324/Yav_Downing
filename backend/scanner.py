@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from queue import Queue
-from threading import Event, Thread, Lock
+from threading import Event, Thread, Lock, RLock
 from urllib.parse import urlparse
 from .sources.javdb import JavdbSource
 
@@ -178,7 +178,7 @@ class JphooSessionManager:
         self.profile_dir = str(Path(profile_dir).expanduser().resolve())
         self.browser_factory = browser_factory
         self.queue, self.thread, self.browser, self.scanner = Queue(), None, None, None
-        self.lock, self.probe_pending = Lock(), Event()
+        self.lock, self.probe_pending = RLock(), Event()
         self.close_after_scan, self.shutdown_requested = Event(), Event()
         self.series_id = None
         self.result = {"status": "closed", "login": "unknown", "session_state": "closed", "profile_dir": self.profile_dir, "window_open": False}
@@ -251,17 +251,18 @@ class JphooSessionManager:
         return self.status()
 
     def start(self, series_id, from_start=False):
-        if self.scanner:
-            raise ValueError("JPHOO 扫描正在运行")
-        series = self._series(int(series_id))
-        self.series_id = int(series_id)
-        snapshot = self._snapshot()
-        if not snapshot.get("window_open") or snapshot.get("login") != "ready":
-            raise ValueError("请先打开会话并验证 JPHOO 登录状态")
-        self._set(status="starting", series_id=self.series_id, series_name=series["name"], source=self.source_name, scanning=True)
-        self._post("scan", series_id=self.series_id, from_start=from_start)
+        series_id = int(series_id)
+        series = self._series(series_id)
+        with self.lock:
+            if self.scanner or self.result.get("scanning") or self.result.get("status") in {"starting", "running", "stopping"}:
+                raise ValueError("JPHOO 扫描正在运行")
+            if not self.result.get("window_open") or self.result.get("login") != "ready":
+                raise ValueError("请先打开会话并验证 JPHOO 登录状态")
+            # 先保留 starting 状态，再把命令交给会话线程，避免重复点击在 scanner 创建前排入两次。
+            self.series_id = series_id
+            self.result.update(status="starting", series_id=series_id, series_name=series["name"], source=self.source_name, scanning=True)
+        self._post("scan", series_id=series_id, from_start=from_start)
         return self.status()
-
     def stop(self, series_id=None):
         if series_id is not None and self.series_id is not None and int(series_id) != self.series_id:
             raise ValueError("请求的系列不是当前正在扫描的系列")

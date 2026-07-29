@@ -129,6 +129,15 @@ class JphooSessionTests(unittest.TestCase):
         self.manager.start(self.series_id)
         self.assertTrue(BlockingScanner.started.wait(1), "扫描器没有启动")
 
+    def test_start_reserves_starting_state_before_worker_creates_scanner(self):
+        self.ready_session()
+        with patch("backend.scanner.JphooScanner", BlockingScanner):
+            self.manager.start(self.series_id)
+            with self.assertRaisesRegex(ValueError, "正在运行"):
+                self.manager.start(self.series_id)
+            self.manager.stop(self.series_id)
+            wait_for(self.manager, lambda state: not state["running"] and state["status"] in {"stopped", "closed"})
+
     def test_close_stops_active_scan_then_releases_browser(self):
         self.start_blocking_scan()
         self.manager.close()
