@@ -112,3 +112,10 @@
 - 静态前端资源改为 no-store，首页为 app.js 注入文件版本查询参数，避免同一 localhost 地址重启后浏览器继续执行旧 ES 模块。
 - 首页在 runtime 尚未注入时安全渲染；新增 HTTP 响应头与版本化 URL 测试。
 - Python 63 项、Node 2 项通过；真实资料库仍为 1,517 部影片。
+
+## 2026-07-29 来源 UI 与 CI 验收修复（未发布）
+
+- 修复来源保存后的刷新时序、取消编辑、删除取消、JPHOO 登录/扫描轮询、详情请求废弃及筛选状态同步。
+- JPHOO `starting` 与立即停止竞态已收紧；来源 URL 变更会重置断点并隔离旧失败 URL。
+- UI 全链路测试改为正式版本控制，不再由 CI 动态改写；本机 Playwright 及 GitHub Ubuntu/Windows 矩阵、Windows PyInstaller 冒烟均通过。
+- Draft PR 仍未合并或发布；尚未完成 2.0.2 RC 发布决策。

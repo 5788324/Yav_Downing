@@ -255,3 +255,12 @@
 - 静态前端资源改为 no-store，首页为 app.js 注入文件版本查询参数，避免同一 localhost 地址重启后浏览器继续执行旧 ES 模块。
 - 首页在 runtime 尚未注入时安全渲染；新增 HTTP 响应头与版本化 URL 测试。
 - Python 63 项、Node 2 项通过；真实资料库仍为 1,517 部影片。
+
+## 2026-07-29：来源 UI、扫描状态与 CI 验收修复
+
+- 修复 `sourceAction()` 在 busy 状态下无法刷新卡片、取消编辑属性判断及取消删除后按钮禁用的问题。
+- 登录中间态保持轮询；扫描启动立即记为 active；关闭详情会废弃未完成请求。
+- 修复 JPHOO starting 被旧扫描覆盖与 starting 后立即停止仍启动扫描的竞态；来源 URL 更换时断点归零、旧失败 URL 标记 superseded。
+- 将 Playwright 的分页、来源扫描文案、确认框和模拟响应字段更新为与当前 UI/API 契约一致；删除 CI 对测试文件的动态改写。
+- 本机完整 Playwright：1 passed（1.1 分钟）；Python 64 项、Node 2 项通过。GitHub Actions run 30468450208：四组 Python、Playwright UI、Windows PyInstaller 冒烟全部通过。
+- 未提交数据库、封面、Cookie、日志、截图或 node_modules；未合并、未发布。
