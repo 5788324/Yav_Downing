@@ -7,139 +7,162 @@ from threading import Event, Thread, Lock
 from urllib.parse import urlparse
 from .sources.javdb import JavdbSource
 
+_STAT_KEYS = ("discovered", "processed", "new_movies", "new_magnets", "failures", "matched_current", "attached_other_movies", "unmatched_candidates", "retried_failures", "resolved_failures")
+
 class BaseScanner:
     source_name = ""
-    def __init__(self, database): self.db=database; self.stop_event=Event()
+    def __init__(self, database): self.db = database; self.stop_event = Event()
     def stop(self): self.stop_event.set()
     def _begin(self, series_id, from_start):
         with self.db.connect() as db:
-            series=db.execute("SELECT * FROM source_series WHERE id=? AND source=?",(series_id,self.source_name)).fetchone()
+            series = db.execute("SELECT * FROM source_series WHERE id=? AND source=?", (series_id, self.source_name)).fetchone()
             if not series: raise ValueError(f"{self.source_name} 系列不存在")
             if not series["enabled"]: raise ValueError("该系列已停用，不能启动扫描")
-            page=1 if from_start else max(1,series["last_completed_page"]+1)
-            run_id=db.execute("INSERT INTO scan_runs(series_id,status,started_at) VALUES(?,?,?)",(series_id,"running",self.db.now())).lastrowid
-        return series,page,run_id
-    def _save_progress(self, series_id,run_id,page,stats,last_error=""):
+            page = 1 if from_start else max(1, series["last_completed_page"] + 1)
+            run_id = db.execute("INSERT INTO scan_runs(series_id,status,started_at) VALUES(?,?,?)", (series_id, "running", self.db.now())).lastrowid
+        return series, page, run_id
+    def _save_progress(self, series_id, run_id, page, stats, last_error="", page_completed=False):
         with self.db.connect() as db:
-            db.execute("UPDATE source_series SET last_completed_page=? WHERE id=?",(page,series_id))
-            db.execute("""UPDATE scan_runs SET current_page=?,discovered=?,processed_count=?,new_movies=?,new_magnets=?,failures=?,matched_current=?,attached_other_movies=?,unmatched_candidates=?,last_error=?,message=? WHERE id=?""",(page,stats["discovered"],stats["processed"],stats["new_movies"],stats["new_magnets"],stats["failures"],stats["matched_current"],stats["attached_other_movies"],stats["unmatched_candidates"],last_error[:200],json.dumps({k:stats[k] for k in ("matched_current","attached_other_movies","unmatched_candidates")},ensure_ascii=False),run_id))
-    def _finish(self,series_id,run_id,page,stats,status,error=""):
+            # 只在一整页全部处理完后推进断点；中途停止会从本页重新进入。
+            if page_completed:
+                db.execute("UPDATE source_series SET last_completed_page=? WHERE id=?", (page, series_id))
+            db.execute("""UPDATE scan_runs SET current_page=?,discovered=?,processed_count=?,new_movies=?,new_magnets=?,failures=?,matched_current=?,attached_other_movies=?,unmatched_candidates=?,last_error=?,message=? WHERE id=?""", (page, stats["discovered"], stats["processed"], stats["new_movies"], stats["new_magnets"], stats["failures"], stats["matched_current"], stats["attached_other_movies"], stats["unmatched_candidates"], last_error[:200], json.dumps({k: stats[k] for k in ("matched_current", "attached_other_movies", "unmatched_candidates", "retried_failures", "resolved_failures")}, ensure_ascii=False), run_id))
+    def _finish(self, series_id, run_id, page, stats, status, error=""):
         with self.db.connect() as db:
-            db.execute("""UPDATE scan_runs SET status=?,current_page=?,discovered=?,processed_count=?,new_movies=?,new_magnets=?,failures=?,matched_current=?,attached_other_movies=?,unmatched_candidates=?,last_error=?,message=?,finished_at=? WHERE id=?""",(status,page,stats["discovered"],stats["processed"],stats["new_movies"],stats["new_magnets"],stats["failures"],stats["matched_current"],stats["attached_other_movies"],stats["unmatched_candidates"],error[:200],error[:200],self.db.now(),run_id))
-            if status=="completed": db.execute("UPDATE source_series SET last_scanned_at=? WHERE id=?",(self.db.now(),series_id))
+            db.execute("""UPDATE scan_runs SET status=?,current_page=?,discovered=?,processed_count=?,new_movies=?,new_magnets=?,failures=?,matched_current=?,attached_other_movies=?,unmatched_candidates=?,last_error=?,message=?,finished_at=? WHERE id=?""", (status, page, stats["discovered"], stats["processed"], stats["new_movies"], stats["new_magnets"], stats["failures"], stats["matched_current"], stats["attached_other_movies"], stats["unmatched_candidates"], error[:200], error[:200], self.db.now(), run_id))
+            if status == "completed": db.execute("UPDATE source_series SET last_scanned_at=? WHERE id=?", (self.db.now(), series_id))
+    def _stats(self): return {key: 0 for key in _STAT_KEYS}
+    def _record_failure(self, series_id, url, page, exc):
+        self.db.record_scan_failure(self.source_name, series_id, url, page, str(exc))
+    def _retry_unresolved(self, series_id, process):
+        for failure in self.db.list_unresolved_scan_failures(self.source_name, series_id):
+            if self.stop_event.is_set(): break
+            yield failure
 
 class JavdbScanner(BaseScanner):
-    source_name="javdb"
-    def run(self,series_id,from_start=False):
-        series,page,run_id=self._begin(series_id,from_start); stats={k:0 for k in ("discovered","processed","new_movies","new_magnets","failures","matched_current","attached_other_movies","unmatched_candidates")}; source=JavdbSource(); error=""
+    source_name = "javdb"
+    def _process_url(self, source, series, series_id, url, page, stats):
+        stats["discovered"] += 1
+        data = source.fetch_movie(url)
+        existed = self.db.movie_import_exists(data.title, "javdb", url)
+        movie = self.db.add_or_update_movie(data.title, studio=data.studio, series=data.series or series["name"], release_date=data.release_date, duration_minutes=data.duration_minutes, cover_url=data.cover_url, actresses=data.actresses, source="javdb", source_url=url)
+        stats["new_movies"] += int(not existed)
+        for item in source.fetch_magnets(url):
+            saved = self.db.add_magnet(movie, item.magnet, "javdb", url, item.size_bytes)
+            stats["new_magnets"] += int(saved.created)
+        stats["processed"] += 1
+        self.db.resolve_scan_failure(self.source_name, series_id, url)
+    def run(self, series_id, from_start=False):
+        series, page, run_id = self._begin(series_id, from_start); stats = self._stats(); source = JavdbSource(); error = ""
         try:
-            for page,urls in source.scan_series(series["url"],start_page=page,stop_event=self.stop_event):
-                for url in urls:
-                    if self.stop_event.is_set(): break
-                    stats["discovered"]+=1
-                    try:
-                        data=source.fetch_movie(url); existed=self.db.movie_import_exists(data.title,"javdb",url)
-                        movie=self.db.add_or_update_movie(data.title,studio=data.studio,series=data.series or series["name"],release_date=data.release_date,duration_minutes=data.duration_minutes,cover_url=data.cover_url,actresses=data.actresses,source="javdb",source_url=url); stats["new_movies"]+=int(not existed)
-                        for item in source.fetch_magnets(url):
-                            saved = self.db.add_magnet(movie, item.magnet, "javdb", url, item.size_bytes)
-                            stats["new_magnets"] += int(saved.created)
-                        stats["processed"]+=1
-                    except Exception as exc: stats["failures"]+=1; error=str(exc)
-                self._save_progress(series_id,run_id,page,stats,error)
+            for failure in self._retry_unresolved(series_id, self._process_url):
                 if self.stop_event.is_set(): break
-            status="stopped" if self.stop_event.is_set() else "completed"
-        except Exception as exc: status="failed"; stats["failures"]+=1; error=str(exc)
-        self._finish(series_id,run_id,page,stats,status,error); return {"status":status,"page":page,"message":error,**stats}
+                stats["retried_failures"] += 1
+                try:
+                    self._process_url(source, series, series_id, failure["source_url"], failure["page"], stats)
+                    stats["resolved_failures"] += 1
+                except Exception as exc:
+                    stats["failures"] += 1; error = str(exc); self._record_failure(series_id, failure["source_url"], failure["page"], exc)
+            if not self.stop_event.is_set():
+                for page, urls in source.scan_series(series["url"], start_page=page, stop_event=self.stop_event):
+                    page_completed = True
+                    for url in urls:
+                        if self.stop_event.is_set(): page_completed = False; break
+                        try:
+                            self._process_url(source, series, series_id, url, page, stats)
+                        except Exception as exc:
+                            stats["failures"] += 1; error = str(exc); self._record_failure(series_id, url, page, exc)
+                    self._save_progress(series_id, run_id, page, stats, error, page_completed)
+                    if not page_completed: break
+            status = "stopped" if self.stop_event.is_set() else "completed"
+        except Exception as exc:
+            status = "failed"; stats["failures"] += 1; error = str(exc)
+        self._finish(series_id, run_id, page, stats, status, error); return {"status": status, "page": page, "message": error, **stats}
 
 class JphooScanner(BaseScanner):
     source_name = "jphoo"
-
     def __init__(self, database, profile_dir, source=None):
-        super().__init__(database)
-        self.profile_dir = str(profile_dir)
-        self.source = source
-
+        super().__init__(database); self.profile_dir = str(profile_dir); self.source = source
+    def _process_url(self, source, series, series_id, url, page, stats):
+        from .sources.jphoo import persist_candidates
+        data = source.fetch_movie(url)
+        if not data.title: raise ValueError("JPHOO 页面未解析到影片名")
+        stats["discovered"] += 1
+        existed = self.db.movie_import_exists(data.title, "jphoo", url)
+        movie = self.db.add_or_update_movie(data.title, studio=data.studio, series=data.series or series["name"], release_date=data.release_date, duration_minutes=data.duration_minutes, cover_url=data.cover_url, actresses=data.actresses, source="jphoo", source_url=url)
+        stats["new_movies"] += int(not existed)
+        outcome = persist_candidates(self.db, movie, data.title, url, source.fetch_magnet_candidates())
+        for key, result_key in (("new_magnets", "new_magnets"), ("matched_current", "matched_current"), ("attached_other_movies", "attached_other"), ("unmatched_candidates", "unmatched")): stats[key] += outcome[result_key]
+        stats["processed"] += 1; self.db.resolve_scan_failure(self.source_name, series_id, url)
     def run(self, series_id, from_start=False):
-        from .sources.jphoo import JphooSource, LoginRequired, persist_candidates
-        series, page, run_id = self._begin(series_id, from_start)
-        stats = {key: 0 for key in ("discovered", "processed", "new_movies", "new_magnets", "failures", "matched_current", "attached_other_movies", "unmatched_candidates")}
-        error = ""
-        owns_browser = self.source is None
-        source = self.source or JphooSource()
+        from .sources.jphoo import JphooSource, LoginRequired
+        series, page, run_id = self._begin(series_id, from_start); stats = self._stats(); error = ""; owns_browser = self.source is None; source = self.source or JphooSource()
         try:
-            if owns_browser:
-                source.open_browser(self.profile_dir)
-            for page, urls in source.scan_series(series["url"], start_page=page, stop_event=self.stop_event):
-                for url in urls:
-                    if self.stop_event.is_set():
-                        break
-                    stats["discovered"] += 1
-                    try:
-                        data = source.fetch_movie(url)
-                        if not data.title:
-                            raise ValueError("JPHOO 页面未解析到影片名")
-                        existed = self.db.movie_import_exists(data.title, "jphoo", url)
-                        movie = self.db.add_or_update_movie(data.title, studio=data.studio, series=data.series or series["name"], release_date=data.release_date, duration_minutes=data.duration_minutes, cover_url=data.cover_url, actresses=data.actresses, source="jphoo", source_url=url)
-                        stats["new_movies"] += int(not existed)
-                        outcome = persist_candidates(self.db, movie, data.title, url, source.fetch_magnet_candidates())
-                        stats["new_magnets"] += outcome["new_magnets"]
-                        stats["matched_current"] += outcome["matched_current"]
-                        stats["attached_other_movies"] += outcome["attached_other"]
-                        stats["unmatched_candidates"] += outcome["unmatched"]
-                        stats["processed"] += 1
-                    except LoginRequired:
-                        raise
-                    except Exception as exc:
-                        stats["failures"] += 1
-                        error = str(exc)
-                self._save_progress(series_id, run_id, page, stats, error)
-                if self.stop_event.is_set():
-                    break
+            if owns_browser: source.open_browser(self.profile_dir)
+            for failure in self._retry_unresolved(series_id, self._process_url):
+                if self.stop_event.is_set(): break
+                stats["retried_failures"] += 1
+                try:
+                    self._process_url(source, series, series_id, failure["source_url"], failure["page"], stats); stats["resolved_failures"] += 1
+                except LoginRequired: raise
+                except Exception as exc: stats["failures"] += 1; error = str(exc); self._record_failure(series_id, failure["source_url"], failure["page"], exc)
+            if not self.stop_event.is_set():
+                for page, urls in source.scan_series(series["url"], start_page=page, stop_event=self.stop_event):
+                    page_completed = True
+                    for url in urls:
+                        if self.stop_event.is_set(): page_completed = False; break
+                        try: self._process_url(source, series, series_id, url, page, stats)
+                        except LoginRequired: raise
+                        except Exception as exc: stats["failures"] += 1; error = str(exc); self._record_failure(series_id, url, page, exc)
+                    self._save_progress(series_id, run_id, page, stats, error, page_completed)
+                    if not page_completed: break
             status = "stopped" if self.stop_event.is_set() else "completed"
-        except LoginRequired as exc:
-            status, error = "login_required", str(exc)
-        except Exception as exc:
-            status, error = "failed", str(exc)
-            stats["failures"] += 1
+        except LoginRequired as exc: status, error = "login_required", str(exc)
+        except Exception as exc: status, error = "failed", str(exc); stats["failures"] += 1
         finally:
-            if owns_browser:
-                source.close()
-        self._finish(series_id, run_id, page, stats, status, error)
-        return {"status": status, "page": page, "message": error, **stats}
-
-
+            if owns_browser: source.close()
+        self._finish(series_id, run_id, page, stats, status, error); return {"status": status, "page": page, "message": error, **stats}
 class ScanManager:
     scanner_class = JavdbScanner
     source_name = "javdb"
     def __init__(self, database):
         self.database, self.scanner, self.thread, self.result, self.series_id = database, None, None, None, None
+        self.lock = Lock()
     def make_scanner(self): return self.scanner_class(self.database)
     def start(self, series_id, from_start=False):
-        if self.thread and self.thread.is_alive(): raise ValueError("该来源已有扫描正在运行")
-        series = self.database.get_source_series(series_id, self.source_name)
-        if not series: raise ValueError("来源系列不存在")
-        if not series["enabled"]: raise ValueError("该系列已停用，不能启动扫描")
-        self.series_id, self.scanner = series_id, self.make_scanner()
-        self.result = {"status":"starting", "series_id":series_id, "series_name":series["name"], "source":self.source_name}
-        self.thread = Thread(target=lambda: setattr(self, "result", self.scanner.run(series_id, from_start)), daemon=True)
-        self.thread.start(); return self.status()
-    def stop(self):
-        if self.scanner: self.scanner.stop()
-        if self.series_id: self.database.set_scan_stopping(self.series_id, self.source_name)
+        with self.lock:
+            if self.thread and self.thread.is_alive(): raise ValueError("该来源已有扫描正在运行")
+            series = self.database.get_source_series(series_id, self.source_name)
+            if not series: raise ValueError("来源系列不存在")
+            if not series["enabled"]: raise ValueError("该系列已停用，不能启动扫描")
+            self.series_id, self.scanner = series_id, self.make_scanner()
+            self.result = {"status":"starting", "series_id":series_id, "series_name":series["name"], "source":self.source_name}
+            scanner = self.scanner
+            def worker():
+                try: result = scanner.run(series_id, from_start)
+                except Exception as exc: result = {"status":"failed", "series_id":series_id, "source":self.source_name, "message":str(exc), "running":False}
+                with self.lock: self.result = result
+            self.thread = Thread(target=worker, daemon=True); self.thread.start()
+            return dict(self.result, running=True)
+    def stop(self, series_id=None):
+        with self.lock:
+            if series_id is not None and self.series_id is not None and int(series_id) != self.series_id:
+                raise ValueError("请求的系列不是当前正在扫描的系列")
+            scanner, current = self.scanner, self.series_id
+        if scanner: scanner.stop()
+        if current: self.database.set_scan_stopping(current, self.source_name)
         return self.status()
     def shutdown(self, timeout=10):
-        """请求停止并在有限时间内等待普通扫描线程结束。"""
-        self.stop()
-        thread = self.thread
-        if thread and thread.is_alive():
-            thread.join(max(0.0, float(timeout)))
+        self.stop(); thread = self.thread
+        if thread and thread.is_alive(): thread.join(max(0.0, float(timeout)))
         return not bool(thread and thread.is_alive())
-    def is_running_series(self, series_id): return bool(self.thread and self.thread.is_alive() and self.series_id == series_id)
+    def is_running_series(self, series_id):
+        with self.lock: return bool(self.thread and self.thread.is_alive() and self.series_id == series_id)
     def status(self):
-        latest = self.database.latest_scan_status(self.source_name); running = bool(self.thread and self.thread.is_alive())
+        with self.lock: running = bool(self.thread and self.thread.is_alive()); result = dict(self.result or {"status":"idle", "source":self.source_name})
+        latest = self.database.latest_scan_status(self.source_name)
         if latest and (running or latest["status"] in {"running", "stopping"}): latest["running"] = running; return latest
-        return {**(self.result or {"status":"idle", "source":self.source_name}), "running":running}
-
+        return {**result, "running":running}
 
 class JphooSessionManager:
     """同一专用线程内复用一个 Playwright persistent context。"""
@@ -234,7 +257,9 @@ class JphooSessionManager:
         self._post("scan", series_id=self.series_id, from_start=from_start)
         return self.status()
 
-    def stop(self):
+    def stop(self, series_id=None):
+        if series_id is not None and self.series_id is not None and int(series_id) != self.series_id:
+            raise ValueError("请求的系列不是当前正在扫描的系列")
         scanner = self.scanner
         self._set(status="stopping", scanning=bool(scanner))
         if self.series_id:
@@ -242,7 +267,6 @@ class JphooSessionManager:
         if scanner:
             scanner.stop()
         return self.status()
-
     def is_running_series(self, series_id):
         return bool(self.scanner and self.series_id == series_id)
 

@@ -263,7 +263,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 if not self.scans: raise ValueError("扫描器未初始化")
                 action,series_id=action_match.group(2),int(action_match.group(1))
-                result=self.scans.stop() if action == "stop" else self.scans.start(series_id, action == "scan")
+                result=self.scans.stop(series_id) if action == "stop" else self.scans.start(series_id, action == "scan")
                 self._json(result, 202)
             except (ValueError, TypeError) as exc:
                 self._json({"error":str(exc)},400)
@@ -285,7 +285,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 if not self.jphoo_scans: raise ValueError("JPHOO 扫描器未初始化")
                 action,series_id=jphoo_action.group(2),int(jphoo_action.group(1))
-                self._json(self.jphoo_scans.stop() if action == "stop" else self.jphoo_scans.start(series_id, action == "scan"), 202)
+                self._json(self.jphoo_scans.stop(series_id) if action == "stop" else self.jphoo_scans.start(series_id, action == "scan"), 202)
             except (ValueError, TypeError) as exc:
                 self._json({"error":str(exc)},400)
             return

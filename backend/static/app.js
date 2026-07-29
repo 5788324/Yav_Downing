@@ -1,3 +1,5 @@
+import { reconcileScanStates } from './scan-state.js';
+
 const state = {
   page: 1,
   pageSize: 36,
@@ -12,6 +14,8 @@ const state = {
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
+let movieListRequestId = 0;
+let movieDetailRequestId = 0;
 
 function escapeHtml(value = '') {
   return String(value).replace(/[&<>'"]/g, (char) => ({
@@ -127,20 +131,24 @@ function showSkeletons() {
   $('#movieGrid').innerHTML = Array.from({ length: Math.min(12, state.pageSize) }, () => '<div class="loading-card"></div>').join('');
 }
 
-async function loadMovies({ scroll = false } = {}) {
-  showSkeletons();
+async function loadMovies({ scroll = false, silent = false } = {}) {
+  const requestId = ++movieListRequestId;
+  if (!silent) showSkeletons();
   try {
-    state.result = await request(`/api/movies?${buildQuery()}`);
+    const result = await request(`/api/movies?${buildQuery()}`);
+    if (requestId !== movieListRequestId) return;
+    if (result.page > result.pages) { state.page = result.pages; return loadMovies({ scroll, silent }); }
+    state.result = result;
     renderMovies();
     if (scroll) $('.content-head').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (error) {
+    if (requestId !== movieListRequestId) return;
     $('#movieGrid').innerHTML = '';
     $('#emptyState').hidden = false;
     $('#emptyState h3').textContent = '读取资料库失败';
     $('#emptyState p').textContent = error.message;
   }
 }
-
 function renderMovies() {
   const { items, total, page, pages } = state.result;
   const grid = $('#movieGrid');
@@ -209,19 +217,13 @@ async function toggleFavorite(id, nextValue, button) {
 }
 
 async function openDetail(id) {
+  const requestId = ++movieDetailRequestId;
   state.detailLastTrigger = document.activeElement;
-  $('#detailOverlay').hidden = false;
-  document.body.style.overflow = 'hidden';
-  $('#closeDetail').focus();
+  $('#detailOverlay').hidden = false; document.body.style.overflow = 'hidden'; $('#closeDetail').focus();
   $('#detailContent').innerHTML = '<div style="padding:100px;text-align:center">正在读取影片资料…</div>';
-  try {
-    state.currentMovie = await request(`/api/movies/${id}`);
-    renderDetail(state.currentMovie);
-  } catch (error) {
-    $('#detailContent').innerHTML = `<div style="padding:100px;text-align:center">${escapeHtml(error.message)}</div>`;
-  }
+  try { const movie = await request(`/api/movies/${id}`); if (requestId !== movieDetailRequestId) return; state.currentMovie = movie; renderDetail(movie); }
+  catch (error) { if (requestId === movieDetailRequestId) $('#detailContent').innerHTML = `<div style="padding:100px;text-align:center">${escapeHtml(error.message)}</div>`; }
 }
-
 function renderDetail(movie) {
   const facts = [
     ['厂商', movie.studio || '未知厂商'],
@@ -439,7 +441,8 @@ async function init() {
 init();
 
 let sourcePollTimer = null;
-let sourceScanActive = false;
+let sourceRefreshInFlight = false;
+const sourceScanStates = { javdb: false, jphoo: false };
 let sourceOpBusy = false;
 let sourceLastTrigger = null;
 
@@ -475,30 +478,27 @@ async function sourcePanel(source, label) {
   const scanText = `当前扫描：${escapeHtml(scan.series_name || '无')} · 来源：${escapeHtml(scan.source || source)} · 状态：${escapeHtml(scan.status || 'idle')} · 当前页：${scan.current_page || scan.page || 0} · 发现：${scan.discovered || 0} · 处理：${scan.processed_count || scan.processed || 0} · 新磁链：${scan.new_magnets || 0} · 失败：${scan.failures || 0}`;
   return `<section class="source-section" data-source-section="${source}">${source === 'javdb' ? '<h2 id="sourcesTitle">来源管理</h2>' : ''}<h3>${label}</h3>${loginCard}<section class="source-status-card" data-scan-status="${source}">${scanText}</section>${sourceForm(source,label)}<div class="source-cards">${rows.map(item => sourceCard(item, login.login || 'unknown', login.profile_dir || '')).join('') || `<p class="source-empty">尚未配置 ${label} 系列。</p>`}</div></section>`;
 }
+function sourcePanelError(label, error) { return `<section class="source-section"><h3>${label}</h3><p class="source-error">${escapeHtml(error.message || '来源状态读取失败')}</p></section>`; }
 async function renderSources() {
   if (sourceOpBusy) return;
-  const content = $('#sourceContent');
-  content.innerHTML = '<p class="source-loading">正在读取来源配置…</p>';
-  try { content.innerHTML = await sourcePanel('javdb', 'JavDB') + await sourcePanel('jphoo', 'JPHOO'); }
-  catch (error) { content.innerHTML = `<p class="source-error">${escapeHtml(error.message)}</p>`; showToast(error.message); }
+  const content = $('#sourceContent'); content.innerHTML = '<p class="source-loading">正在读取来源配置…</p>';
+  const panels = await Promise.allSettled([sourcePanel('javdb', 'JavDB'), sourcePanel('jphoo', 'JPHOO')]);
+  content.innerHTML = panels.map((item, index) => item.status === 'fulfilled' ? item.value : sourcePanelError(index ? 'JPHOO' : 'JavDB', item.reason)).join('');
 }
-function openSources() { sourceLastTrigger = document.activeElement; $('#openSources').setAttribute('aria-current','page'); $('#sourceOverlay').hidden = false; document.body.style.overflow = 'hidden'; renderSources().then(() => $('#closeSources').focus()); if (!sourcePollTimer) sourcePollTimer = setInterval(refreshSourceStatuses, 3000); }
-function closeSources() { $('#sourceOverlay').hidden = true; $('#openSources').removeAttribute('aria-current'); document.body.style.overflow = ''; clearInterval(sourcePollTimer); sourcePollTimer = null; sourceLastTrigger?.focus(); }
+function ensureSourcePolling() { if (!sourcePollTimer) sourcePollTimer = setInterval(refreshSourceStatuses, 3000); }
+function openSources() { sourceLastTrigger = document.activeElement; $('#openSources').setAttribute('aria-current','page'); $('#sourceOverlay').hidden = false; document.body.style.overflow = 'hidden'; renderSources().then(() => $('#closeSources').focus()); ensureSourcePolling(); }
+function closeSources() { $('#sourceOverlay').hidden = true; $('#openSources').removeAttribute('aria-current'); document.body.style.overflow = ''; sourceLastTrigger?.focus(); }
 async function refreshSourceStatuses() {
-  if ($('#sourceOverlay').hidden || sourceOpBusy || document.activeElement?.closest('.source-form')) return;
+  if (sourceRefreshInFlight || sourceOpBusy) return;
+  sourceRefreshInFlight = true;
   try {
-    let scanning = false;
-    for (const source of ['javdb','jphoo']) {
-      const scan = await request(`/api/sources/${source}/scan`);
-      scanning ||= scan.status === 'running' || scan.status === 'stopping';
-      const box = $(`[data-scan-status="${source}"]`);
-      if (box) box.textContent = `当前扫描：${scan.series_name || '无'} · 来源：${scan.source || source} · 状态：${scan.status || 'idle'} · 当前页：${scan.current_page || scan.page || 0} · 发现：${scan.discovered || 0} · 处理：${scan.processed_count || scan.processed || 0} · 新磁链：${scan.new_magnets || 0} · 失败：${scan.failures || 0}`;
-    }
-    const justStopped = sourceScanActive && !scanning;
-    sourceScanActive = scanning;
-    if (scanning || justStopped) await Promise.all([loadFilters(), loadMovies()]);
-    if (justStopped) await renderSources();
-  } catch (_) { /* 保留当前界面，下一次轮询重试 */ }
+    const scans = {};
+    for (const source of ['javdb','jphoo']) { const scan = await request(`/api/sources/${source}/scan`); scans[source] = scan; const box = $(`[data-scan-status="${source}"]`); if (box) box.textContent = `当前扫描：${scan.series_name || '无'} · 来源：${scan.source || source} · 状态：${scan.status || 'idle'} · 当前页：${scan.current_page || scan.page || 0} · 发现：${scan.discovered || 0} · 处理：${scan.processed_count || scan.processed || 0} · 新磁链：${scan.new_magnets || 0} · 失败：${scan.failures || 0}`; }
+    const transition = reconcileScanStates(sourceScanStates, scans); Object.assign(sourceScanStates, transition.next);
+    if (transition.refreshLibrary) await Promise.all([loadFilters(), loadMovies({ silent: true })]);
+    if (transition.stoppedSources.length && !$('#sourceOverlay').hidden) await renderSources();
+    if (!Object.values(transition.next).some(Boolean)) { clearInterval(sourcePollTimer); sourcePollTimer = null; }
+  } catch (_) { } finally { sourceRefreshInFlight = false; }
 }
 async function sourceAction(button, work) {
   if (sourceOpBusy) return; sourceOpBusy = true; button.disabled = true;

@@ -13,6 +13,17 @@ from backend.scanner import ScanManager
 from backend.sources.jphoo import api_candidates, classify_magnet_candidate
 
 
+class BtihNormalizationTests(unittest.TestCase):
+    def test_hex_and_base32_normalize_to_one_infohash_and_invalid_is_rejected(self):
+        from backend.db import extract_btih
+        import base64
+        hex_hash = "0123456789ABCDEF0123456789ABCDEF01234567"
+        base32_hash = base64.b32encode(bytes.fromhex(hex_hash)).decode("ascii")
+        self.assertEqual(extract_btih(f"magnet:?xt=urn:btih:{hex_hash.lower()}"), hex_hash)
+        self.assertEqual(extract_btih(f"magnet:?xt=urn:btih:{base32_hash}"), hex_hash)
+        for value in ("123", "INVALIDHASH", "A" * 39, "A" * 33):
+            with self.assertRaises(ValueError):
+                extract_btih(f"magnet:?xt=urn:btih:{value}")
 class HardeningDataTests(unittest.TestCase):
     def test_metadata_and_magnet_result_rules(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -25,9 +36,9 @@ class HardeningDataTests(unittest.TestCase):
             db.add_or_update_movie("ABP-001", studio="Other Studio", actresses=["A", "D"], source="javdb", source_url="https://x/j")
             self.assertEqual(db.get_movie(movie)["studio"], "Manual Studio")
             self.assertEqual(db.get_movie(movie)["actresses"], ["C"])
-            one = db.add_magnet(movie, "magnet:?xt=urn:btih:ABC", "javdb", "https://x/j", None)
-            two = db.add_magnet(movie, "magnet:?xt=urn:btih:ABC", "jphoo", "https://x/p", 200)
-            three = db.add_magnet(movie, "magnet:?xt=urn:btih:ABC", "jphoo", "https://x/p", None)
+            one = db.add_magnet(movie, "magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "javdb", "https://x/j", None)
+            two = db.add_magnet(movie, "magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "jphoo", "https://x/p", 200)
+            three = db.add_magnet(movie, "magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "jphoo", "https://x/p", None)
             self.assertEqual((one.created, one.source_added, one.size_updated), (True, True, False))
             self.assertEqual((two.created, two.source_added, two.size_updated), (False, True, True))
             self.assertEqual((three.created, three.source_added, three.size_updated), (False, False, False))
@@ -118,7 +129,9 @@ class ApiTests(unittest.TestCase):
 class FrontendStaticTests(unittest.TestCase):
     def test_source_panel_safety_contracts(self):
         app = (Path(__file__).parents[1] / "backend" / "static" / "app.js").read_text(encoding="utf-8")
-        self.assertIn("document.activeElement?.closest('.source-form')", app)
+        self.assertIn("sourceRefreshInFlight", app)
+        self.assertIn("Promise.allSettled", app)
+        self.assertIn("ensureSourcePolling", app)
         self.assertIn("window.confirm", app)
         self.assertIn("if (!$(\x27#sourceOverlay\x27).hidden) closeSources()", app)
         self.assertIn("aria-current", app)
@@ -126,11 +139,14 @@ class FrontendStaticTests(unittest.TestCase):
 
 
     def test_scan_refresh_contract(self):
-        app = (Path(__file__).parents[1] / "backend" / "static" / "app.js").read_text(encoding="utf-8")
-        self.assertIn("let sourceScanActive = false", app)
-        self.assertIn("scanning ||= scan.status === 'running' || scan.status === 'stopping'", app)
+        root = Path(__file__).parents[1]
+        app = (root / "backend" / "static" / "app.js").read_text(encoding="utf-8")
+        html = (root / "backend" / "static" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("const sourceScanStates = { javdb: false, jphoo: false };", app)
+        self.assertIn("reconcileScanStates(sourceScanStates, scans)", app)
+        self.assertIn("transition.stoppedSources.length", app)
         self.assertIn("Promise.all([loadFilters(), loadMovies()])", app)
-        self.assertIn("if (justStopped) await renderSources()", app)
+        self.assertIn('type="module" src="/assets/app.js"', html)
 
 if __name__ == "__main__":
     unittest.main()
