@@ -43,6 +43,20 @@ class HardeningDataTests(unittest.TestCase):
             self.assertEqual((two.created, two.source_added, two.size_updated), (False, True, True))
             self.assertEqual((three.created, three.source_added, three.size_updated), (False, False, False))
 
+    def test_single_source_title_can_be_corrected_without_overriding_manual_or_multisource_movies(self):
+        with tempfile.TemporaryDirectory() as folder:
+            db = LibraryDatabase(Path(folder) / "library.db")
+            single = db.add_or_update_movie("Wrong Title", source="javdb", source_url="https://x/one")
+            db.add_or_update_movie("Correct Title", source="javdb", source_url="https://x/one")
+            self.assertEqual(db.get_movie(single)["title"], "Correct Title")
+            db.update_movie(single, {"title": "Manual Title"})
+            db.add_or_update_movie("Later Title", source="javdb", source_url="https://x/one")
+            self.assertEqual(db.get_movie(single)["title"], "Manual Title")
+            multiple = db.add_or_update_movie("Old Shared", source="javdb", source_url="https://x/two")
+            db.add_or_update_movie("Old Shared", source="jphoo", source_url="https://x/three")
+            db.add_or_update_movie("New Shared", source="javdb", source_url="https://x/two")
+            self.assertEqual(db.get_movie(multiple)["title"], "Old Shared")
+
     def test_jphoo_candidate_uses_explicit_title_only(self):
         rows = api_candidates({"rows": [{"infoHash": "A" * 40, "name": "ABP-123 Clear Name", "length": "2 GB", "status": "ready"}, {"infoHash": "B" * 40, "length": "3 GB", "id": "999"}]})
         self.assertEqual(rows[0].title, "ABP-123 Clear Name")
