@@ -104,6 +104,9 @@ class ApiTests(unittest.TestCase):
         other = self.request("POST", "/api/sources/javdb", {"name":"Other","url":"https://x/other","enabled":True})[1]
         Handler.scans.series_id = javdb["id"]
         self.assertEqual(self.request("POST", f'/api/sources/javdb/{other["id"]}/stop', {})[0], 409)
+        Handler.scans.is_running_series = lambda series_id: int(series_id) == javdb["id"]
+        self.assertEqual(self.request("POST", "/api/sources/javdb", {"series_id":javdb["id"],"name":"Blocked","url":"https://x/blocked","enabled":False})[0], 409)
+        Handler.scans.is_running_series = lambda _series_id: False
         status, _ = self.request("POST", "/api/sources/javdb", {"series_id":javdb["id"],"name":"J2","url":"https://x/j2","enabled":False,"new_magnets":99})
         self.assertEqual(status, 201)
         self.assertEqual(self.db.get_source_series(javdb["id"], "javdb")["name"], "J2")

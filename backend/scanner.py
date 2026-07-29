@@ -274,7 +274,8 @@ class JphooSessionManager:
             scanner.stop()
         return self.status()
     def is_running_series(self, series_id):
-        return bool(self.scanner and self.series_id == series_id)
+        snapshot = self._snapshot()
+        return bool(snapshot.get("scanning") and self.series_id == int(series_id))
 
     def status(self):
         # Playwright 对象只能由专用线程访问；轮询只投递一次轻量探测。

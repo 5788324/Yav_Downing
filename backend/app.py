@@ -292,14 +292,18 @@ class Handler(BaseHTTPRequestHandler):
 
         if urlparse(self.path).path == "/api/sources/jphoo":
             try:
-                payload=self._source_payload(self._read_json(), "jphoo"); self._json({"id": self.database.save_source_series(**payload)}, 201)
+                payload = self._source_payload(self._read_json(), "jphoo")
+                if payload.get("series_id") and self.jphoo_scans and self.jphoo_scans.is_running_series(payload["series_id"]): raise ValueError("该系列正在扫描，不能修改网址或启用状态")
+                self._json({"id": self.database.save_source_series(**payload)}, 201)
             except (ValueError, TypeError) as exc:
                 self._json({"error":str(exc)}, 409 if "已经存在" in str(exc) or "正在扫描" in str(exc) else 400)
             return
 
         if urlparse(self.path).path == "/api/sources/javdb":
             try:
-                self._json({"id": self.database.save_source_series(**self._source_payload(self._read_json(), "javdb"))}, 201)
+                payload = self._source_payload(self._read_json(), "javdb")
+                if payload.get("series_id") and self.scans and self.scans.is_running_series(payload["series_id"]): raise ValueError("该系列正在扫描，不能修改网址或启用状态")
+                self._json({"id": self.database.save_source_series(**payload)}, 201)
             except (ValueError, TypeError) as exc:
                 self._json({"error": str(exc)}, 409 if "已经存在" in str(exc) or "正在扫描" in str(exc) else 400)
             return
