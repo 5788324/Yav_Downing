@@ -449,7 +449,8 @@ let sourceRefreshInFlight = false;
 let sourceStatusFailures = 0;
 const sourceScanStates = { javdb: false, jphoo: false };
 let sourceOpBusy = false;
-let sourceLastTrigger = null;`nlet sourcePageEnding = false;
+let sourceLastTrigger = null;
+let sourcePageEnding = false;
 
 function sourcePayload(form, source) {
   return {
@@ -481,6 +482,7 @@ function sourceForm(source, label) {
 }
 async function sourcePanel(source, label) {
   const [rows, scan, login] = await Promise.all([request(`/api/sources/${source}`), request(`/api/sources/${source}/scan`), source === 'jphoo' ? request('/api/sources/jphoo/login') : Promise.resolve({})]);
+  sourceScanStates[source] = ['starting','running','stopping'].includes(scan.status);
   const loginState = loginDisplayState(login);
   const currentRows = rows.map(item => (item.id === scan.series_id && ['starting','running','stopping'].includes(scan.status)) ? {...item, ...scan, scan_status: scan.status} : item);
   const loginCard = source === 'jphoo' ? `<section class="source-status-card"><h3>JPHOO 会话：<span data-login-state>${escapeHtml(loginState)}</span></h3><p>统一 Profile：${escapeHtml(login.profile_dir || '正在读取')}<br>目标域名：${escapeHtml(login.target_origin || '请选择系列')}<br>浏览器会话：${login.window_open ? '已打开' : '未打开'} · 最后验证：${escapeHtml(login.last_verified_at || '未验证')}</p><label>登录目标<select id="jphooLoginSeries">${currentRows.filter(item => item.enabled).map(item => `<option value="${item.id}">${escapeHtml(item.name)} · ${escapeHtml(item.url)}</option>`).join('') || '<option value="">请先添加并启用系列</option>'}</select></label><button data-login="open">打开/恢复会话</button><button data-login="check" ${login.window_open ? '' : 'disabled'}>验证登录</button><button data-login="close" ${login.window_open ? '' : 'disabled'}>关闭会话</button></section>` : '';
@@ -496,7 +498,7 @@ async function renderSources() {
 function stopSourcePolling(force = false) { if (sourcePollTimer && (force || !Object.values(sourceScanStates).some(Boolean))) { clearInterval(sourcePollTimer); sourcePollTimer = null; } }
 function ensureSourcePolling() { if (!sourcePageEnding && !sourcePollTimer) sourcePollTimer = setInterval(refreshSourceStatuses, 3000); }
 function openSources() { sourceLastTrigger = document.activeElement; $('#openSources').setAttribute('aria-current','page'); $('#sourceOverlay').hidden = false; document.body.style.overflow = 'hidden'; renderSources().then(() => $('#closeSources').focus()); ensureSourcePolling(); }
-function closeSources() { $('#sourceOverlay').hidden = true; $('#openSources').removeAttribute('aria-current'); document.body.style.overflow = ''; sourceLastTrigger?.focus(); }
+function closeSources() { $('#sourceOverlay').hidden = true; $('#openSources').removeAttribute('aria-current'); document.body.style.overflow = ''; sourceLastTrigger?.focus(); stopSourcePolling(); }
 async function refreshSourceStatuses() {
   if (sourceRefreshInFlight || sourceOpBusy) return;
   sourceRefreshInFlight = true;
