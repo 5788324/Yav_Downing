@@ -459,10 +459,10 @@ function sourcePayload(form, source) {
     profile_dir: '',
   };
 }
-function sourceButtons(item, sessionLogin = 'ready') {
+function sourceButtons(item, session = {}) {
   const state = item.scan_status || (item.enabled ? 'idle' : 'disabled');
   const locked = ['starting', 'running', 'stopping'].includes(state);
-  const needsLogin = item.source === 'jphoo' && sessionLogin !== 'ready';
+  const needsLogin = item.source === 'jphoo' && !(session.status === 'ready' && session.login === 'ready' && session.window_open === true);
   const disabled = !item.enabled || locked || needsLogin;
   if (state === 'starting') return '<button disabled>正在启动…</button>';
   if (state === 'running') return `<button data-source="${item.source}" data-stop="${item.id}">停止扫描</button>`;
@@ -471,10 +471,10 @@ function sourceButtons(item, sessionLogin = 'ready') {
   if (state === 'login_required' || needsLogin) return '<span class="source-hint">请先打开会话并验证 JPHOO 登录</span>';
   return `<button data-source="${item.source}" data-scan="${item.id}" ${disabled ? 'disabled' : ''}>从第 1 页重新扫描</button><button data-source="${item.source}" data-continue="${item.id}" ${disabled ? 'disabled' : ''}>继续扫描</button><button data-source="${item.source}" data-edit="${item.id}" ${locked ? 'disabled' : ''}>编辑</button><button data-source="${item.source}" data-toggle="${item.id}" data-enabled="false" ${locked ? 'disabled' : ''}>停用</button><button data-source="${item.source}" data-delete="${item.id}" ${locked ? 'disabled' : ''}>删除</button>`;
 }
-function sourceCard(item, sessionLogin = 'ready', appProfile = '') {
+function sourceCard(item, session = {}, appProfile = '') {
   const stats = `页 ${item.current_page || item.last_completed_page || 0} · 发现 ${item.discovered || 0} · 处理 ${item.processed_count || 0} · 新磁链 ${item.new_magnets || 0} · 失败 ${item.failures || 0}`;
   const legacyProfile = item.source === 'jphoo' && item.profile_dir && item.profile_dir !== appProfile ? '<br><small class="source-hint">旧版系列 Profile 已不再使用；当前统一使用上方应用 Profile。</small>' : '';
-  return `<article class="source-card" data-source-card="${item.source}-${item.id}"><div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.url)}</p><small>${item.enabled ? '已启用' : '已停用'} · ${stats}${item.last_error ? ` · ${escapeHtml(item.last_error)}` : ''}</small>${legacyProfile}</div><div class="source-actions">${sourceButtons(item, sessionLogin)}</div></article>`;
+  return `<article class="source-card" data-source-card="${item.source}-${item.id}"><div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.url)}</p><small>${item.enabled ? '已启用' : '已停用'} · ${stats}${item.last_error ? ` · ${escapeHtml(item.last_error)}` : ''}</small>${legacyProfile}</div><div class="source-actions">${sourceButtons(item, session)}</div></article>`;
 }
 function loginDisplayState(login = {}) { const status=String(login.status || ''); const stable=String(login.login || ''); return ['opening','checking','closing'].includes(status) ? status : (status || stable || 'unknown'); }
 function sourceForm(source, label) {
@@ -487,7 +487,7 @@ async function sourcePanel(source, label) {
   const currentRows = rows.map(item => (item.id === scan.series_id && ['starting','running','stopping'].includes(scan.status)) ? {...item, ...scan, scan_status: scan.status} : item);
   const loginCard = source === 'jphoo' ? `<section class="source-status-card"><h3>JPHOO 会话：<span data-login-state>${escapeHtml(loginState)}</span></h3><p>统一 Profile：${escapeHtml(login.profile_dir || '正在读取')}<br>目标域名：${escapeHtml(login.target_origin || '请选择系列')}<br>浏览器会话：${login.window_open ? '已打开' : '未打开'} · 最后验证：${escapeHtml(login.last_verified_at || '未验证')}</p><label>登录目标<select id="jphooLoginSeries">${currentRows.filter(item => item.enabled).map(item => `<option value="${item.id}">${escapeHtml(item.name)} · ${escapeHtml(item.url)}</option>`).join('') || '<option value="">请先添加并启用系列</option>'}</select></label><button data-login="open">打开/恢复会话</button><button data-login="check" ${login.window_open ? '' : 'disabled'}>验证登录</button><button data-login="close" ${login.window_open ? '' : 'disabled'}>关闭会话</button></section>` : '';
   const scanText = `当前扫描：${escapeHtml(scan.series_name || '无')} · 来源：${escapeHtml(scan.source || source)} · 状态：${escapeHtml(scan.status || 'idle')} · 当前页：${scan.current_page || scan.page || 0} · 发现：${scan.discovered || 0} · 处理：${scan.processed_count || scan.processed || 0} · 新磁链：${scan.new_magnets || 0} · 失败：${scan.failures || 0}`;
-  return `<section class="source-section" data-source-section="${source}">${source === 'javdb' ? '<h2 id="sourcesTitle">来源管理</h2>' : ''}<h3>${label}</h3>${loginCard}<section class="source-status-card" data-scan-status="${source}">${scanText}</section>${sourceForm(source,label)}<div class="source-cards">${currentRows.map(item => sourceCard(item, login.login || 'unknown', login.profile_dir || '')).join('') || `<p class="source-empty">尚未配置 ${label} 系列。</p>`}</div></section>`;
+  return `<section class="source-section" data-source-section="${source}">${source === 'javdb' ? '<h2 id="sourcesTitle">来源管理</h2>' : ''}<h3>${label}</h3>${loginCard}<section class="source-status-card" data-scan-status="${source}">${scanText}</section>${sourceForm(source,label)}<div class="source-cards">${currentRows.map(item => sourceCard(item, login, login.profile_dir || '')).join('') || `<p class="source-empty">尚未配置 ${label} 系列。</p>`}</div></section>`;
 }
 function sourcePanelError(label, error) { return `<section class="source-section"><h3>${label}</h3><p class="source-error">${escapeHtml(error.message || '来源状态读取失败')}</p></section>`; }
 async function renderSources() {
@@ -500,7 +500,7 @@ function ensureSourcePolling() { if (!sourcePageEnding && !sourcePollTimer) sour
 function openSources() { sourceLastTrigger = document.activeElement; $('#openSources').setAttribute('aria-current','page'); $('#sourceOverlay').hidden = false; document.body.style.overflow = 'hidden'; renderSources().then(() => $('#closeSources').focus()); ensureSourcePolling(); }
 function closeSources() { $('#sourceOverlay').hidden = true; $('#openSources').removeAttribute('aria-current'); document.body.style.overflow = ''; sourceLastTrigger?.focus(); stopSourcePolling(); }
 async function refreshSourceStatuses() {
-  if (sourceRefreshInFlight || sourceOpBusy) return;
+  if (sourcePageEnding || sourceRefreshInFlight || sourceOpBusy) return;
   sourceRefreshInFlight = true;
   try {
     const scans = {};
@@ -573,6 +573,11 @@ async function waitForYavShutdown() {
   return false;
 }
 
+window.addEventListener('pagehide', () => {
+  sourcePageEnding = true;
+  stopSourcePolling(true);
+});
+
 $('#shutdownApp')?.addEventListener('click', async () => {
   if (!confirm('退出会停止正在进行的扫描并关闭 Yav。是否继续？')) return;
   const button = $('#shutdownApp');
@@ -589,5 +594,11 @@ $('#shutdownApp')?.addEventListener('click', async () => {
     document.body.innerHTML = stopped
       ? '<main class="empty-state"><h3>Yav 已安全退出，可以关闭此页面。</h3></main>'
       : '<main class="empty-state"><h3>Yav 仍在安全退出中，请稍后关闭此页面。</h3></main>';
-  } catch (error) { button.disabled = false; button.textContent = '安全退出 Yav'; showToast(error.message); }
+  } catch (error) {
+    sourcePageEnding = false;
+    button.disabled = false;
+    button.textContent = '安全退出 Yav';
+    if (!$('#sourceOverlay').hidden || Object.values(sourceScanStates).some(Boolean)) ensureSourcePolling();
+    showToast(error.message);
+  }
 });
