@@ -160,6 +160,15 @@ class JphooSessionTests(unittest.TestCase):
 
 
 
+    def test_idle_stop_is_idempotent_and_unready_session_cannot_start(self):
+        before = self.manager.status()
+        self.assertEqual(self.manager.stop(self.series_id)["status"], before["status"])
+        self.manager._set(status="window_open", login="ready", window_open=True)
+        with self.assertRaisesRegex(ValueError, "验证"):
+            self.manager.start(self.series_id)
+        self.manager._set(status="ready", login="ready", window_open=False)
+        with self.assertRaisesRegex(ValueError, "验证"):
+            self.manager.start(self.series_id)
     def test_completed_scan_result_keeps_its_status(self):
         self.ready_session()
         with patch("backend.scanner.JphooScanner", ImmediateScanner):
