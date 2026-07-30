@@ -86,6 +86,7 @@ async function installSourceMock(page) {
     jphoo: { source: 'jphoo', status: 'idle', running: false, current_page: 0, discovered: 0, processed_count: 0, new_magnets: 0, failures: 0 },
   };
   let login = { login: 'login_required', status: 'login_required', window_open: false, profile_dir: '/tmp/yav-ui-profile', target_origin: 'https://jphoo.example', last_verified_at: '' };
+  let loginTransitions = [];
 
   await page.route('**/api/sources/**', async route => {
     const request = route.request();
@@ -94,12 +95,24 @@ async function installSourceMock(page) {
     const method = request.method();
     const send = (body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
-    if (pathname === '/api/sources/jphoo/login' && method === 'GET') return send(login);
+    if (pathname === '/api/sources/jphoo/login' && method === 'GET') {
+      if (loginTransitions.length) login = loginTransitions.shift();
+      return send(login);
+    }
     const loginAction = pathname.match(/^\/api\/sources\/jphoo\/login\/(open|check|close)$/);
     if (loginAction && method === 'POST') {
-      if (loginAction[1] === 'open') login = { ...login, login: 'window_open', status: 'window_open', window_open: true };
-      if (loginAction[1] === 'check') login = { ...login, login: 'ready', status: 'ready', window_open: true, last_verified_at: '2026-07-27T12:00:00+08:00' };
-      if (loginAction[1] === 'close') login = { ...login, login: 'login_required', status: 'login_required', window_open: false };
+      if (loginAction[1] === 'open') {
+        login = { ...login, login: 'checking', status: 'opening', window_open: false };
+        loginTransitions = [{ ...login }, { ...login, login: 'window_open', status: 'window_open', window_open: true }];
+      }
+      if (loginAction[1] === 'check') {
+        login = { ...login, login: 'checking', status: 'checking', window_open: true };
+        loginTransitions = [{ ...login }, { ...login, login: 'ready', status: 'ready', window_open: true, last_verified_at: '2026-07-27T12:00:00+08:00' }];
+      }
+      if (loginAction[1] === 'close') {
+        login = { ...login, login: 'unknown', status: 'closing', window_open: true };
+        loginTransitions = [{ ...login }, { ...login, login: 'login_required', status: 'login_required', window_open: false }];
+      }
       return send(login, 202);
     }
 
@@ -437,9 +450,9 @@ test('Yav V2 全链路 UI、交互、响应式和无障碍验收', async ({ brow
   await expect(page.locator('[data-login="close"]')).toBeDisabled();
   await page.locator('#jphooLoginSeries').selectOption('2');
   await page.locator('[data-login="open"]').click();
-  await expect(page.locator('[data-login="check"]')).toBeEnabled();
+  await expect(page.locator('[data-login="check"]')).toBeEnabled({ timeout: 10000 });
   await page.locator('[data-login="check"]').click();
-  await expect(page.locator('[data-login-state]')).toHaveText('ready');
+  await expect(page.locator('[data-login-state]')).toHaveText('ready', { timeout: 10000 });
   mark('JPHOO 会话', '登录目标、打开会话、验证登录');
 
   const jphooExisting = page.locator('[data-source-card="jphoo-2"]');
@@ -452,7 +465,7 @@ test('Yav V2 全链路 UI、交互、响应式和无障碍验收', async ({ brow
   await page.locator('[data-source-card="jphoo-2"]').getByRole('button', { name: '停止扫描' }).click();
   mark('JPHOO 扫描', '全量、停止、继续、再次停止');
   await page.locator('[data-login="close"]').click();
-  await expect(page.locator('[data-login-state]')).toHaveText('login_required');
+  await expect(page.locator('[data-login-state]')).toHaveText('login_required', { timeout: 10000 });
   mark('JPHOO 会话', '关闭会话');
 
   const javdbExisting = page.locator('[data-source-card="javdb-1"]');

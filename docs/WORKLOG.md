@@ -266,3 +266,10 @@
 - 未提交数据库、封面、Cookie、日志、截图或 node_modules；未合并、未发布。
 
 - 2026-07-30：RC 小型回归修复。增加临时 schema 3 数据库迁移测试，确认等价 BTIH 合并后来源关系、有效大小和最早发现时间保留，非法 BTIH 不删除；本地 65 项测试、JS 检查和扫描状态测试通过。
+
+## 2026-07-30 — 2.0.2 RC 收口与隔离验收
+
+- 核对 Draft PR #6：重跑后 GitHub CI 全绿（四组 Python、Playwright UI、Windows PyInstaller）。首次 Windows EXE 就绪超时未能在合并同树、本机空目录复现，因此没有添加非证据驱动的修复。
+- 新增两项 JPHOO 确定性 Event/barrier 回归：scanner 创建后、run 前 stop/close；验证取消不进入 `run()`，关闭释放 FakeBrowser，Event 不残留。
+- 在 `C:\tmp\yav-20202-rc-copy-20260730` 的备份副本执行 schema 3→4、二次幂等、只读 BTIH/演员审计、候选 EXE API 启动、备份与 CLI 退出。数据库统计无删除，`PRAGMA integrity_check` 为 ok；没有操作唯一正式数据。
+- 本地检查：`compileall`、68 项 Python、两份 JS 语法检查、Node scan-state 与 `git diff --check` 通过。

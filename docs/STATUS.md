@@ -121,3 +121,11 @@
 - Draft PR 仍未合并或发布；尚未完成 2.0.2 RC 发布决策。
 
 - 2026-07-30：Draft PR #6 补齐 schema 3→4 的历史 BTIH 规范化：同片 Base32/hex 碰撞合并来源关系，非法值保留供审计；JPHOO 来源卡片采用内存扫描状态，登录轮询同时判断 status/login，并补强 pending scan 停止检查。
+
+## 2026-07-30：2.0.2 RC 收口隔离验收（Draft PR #6，未发布）
+
+- Draft PR #6 的 Python 3.11/3.12（Ubuntu、Windows）、Playwright UI 全链路和 Windows PyInstaller 冒烟均为通过；首次 PyInstaller 超时在本机空目录与重跑 CI 均未复现，未做猜测性代码改动。
+- 补充 JPHOO 会话竞态回归：扫描器已创建、`run()` 尚未开始时的 stop 与 close 均不会触发影片扫描；close 会释放浏览器，并清除停止/关闭 Event。
+- 仅使用 `C:\tmp` 中的 2.0.1 备份副本完成 schema 3→4 首次升级和第二次幂等初始化。统计保持：1,498 影片、1,498 来源页、11,747 磁链、11,747 磁链来源、1,166 演员、3,308 影片—演员关联、0 未解决失败任务。
+- 只读审计：`integrity_check=ok`、11,747 条 40 位规范 BTIH、0 Base32、0 非法 BTIH、0 片内/跨片规范重复、0 无效演员；候选 EXE 可启动 API，CLI 安全退出后端口与 runtime 均释放，并在临时副本创建升级后备份。
+- 仍为 Draft，未合并、未发布、未修改正式数据库、浏览器 Profile 或 2.0.1 资产。

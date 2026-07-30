@@ -59,6 +59,26 @@ class ImmediateScanner:
     def run(self, _series_id, _from_start=False):
         return {"status": "stopped", "page": 1, "message": "", "discovered": 0, "processed": 0, "new_movies": 0, "new_magnets": 0, "failures": 0}
 
+
+class GateBeforeRunScanner:
+    """让测试在 scanner 已创建、run 尚未开始的确定窗口中发出 stop/close。"""
+    created = Event()
+    release_constructor = Event()
+    run_called = Event()
+
+    def __init__(self, _database, _profile_dir, source=None):
+        self.source = source
+        self.stop_requested = Event()
+        type(self).created.set()
+        type(self).release_constructor.wait(2)
+
+    def stop(self):
+        self.stop_requested.set()
+
+    def run(self, _series_id, _from_start=False):
+        type(self).run_called.set()
+        return {"status": "stopped", "page": 1, "message": "", "discovered": 0, "processed": 0, "new_movies": 0, "new_magnets": 0, "failures": 0}
+
 def wait_for(manager, predicate):
     deadline = time.time() + 3
     while time.time() < deadline:
@@ -77,6 +97,9 @@ class JphooSessionTests(unittest.TestCase):
         FakeBrowser.instances.clear()
         BlockingScanner.instances.clear()
         BlockingScanner.started.clear()
+        GateBeforeRunScanner.created.clear()
+        GateBeforeRunScanner.release_constructor.clear()
+        GateBeforeRunScanner.run_called.clear()
         self.manager = JphooSessionManager(self.db, Path(self.temp.name) / "app-profile", browser_factory=FakeBrowser)
 
     def tearDown(self):
@@ -169,6 +192,33 @@ class JphooSessionTests(unittest.TestCase):
         self.manager._set(status="ready", login="ready", window_open=False)
         with self.assertRaisesRegex(ValueError, "验证"):
             self.manager.start(self.series_id)
+    def test_stop_after_scanner_created_prevents_run(self):
+        self.ready_session()
+        with patch("backend.scanner.JphooScanner", GateBeforeRunScanner):
+            self.manager.start(self.series_id)
+            self.assertTrue(GateBeforeRunScanner.created.wait(1), "扫描器未创建")
+            self.manager.stop(self.series_id)
+            GateBeforeRunScanner.release_constructor.set()
+            state = wait_for(self.manager, lambda item: item["status"] == "stopped" and not item["running"])
+        self.assertFalse(GateBeforeRunScanner.run_called.is_set())
+        self.assertFalse(self.manager.scan_stop_requested.is_set())
+        self.assertFalse(self.manager.close_after_scan.is_set())
+        self.assertEqual(state["status"], "stopped")
+
+    def test_close_after_scanner_created_releases_browser_without_run(self):
+        self.ready_session()
+        with patch("backend.scanner.JphooScanner", GateBeforeRunScanner):
+            self.manager.start(self.series_id)
+            self.assertTrue(GateBeforeRunScanner.created.wait(1), "扫描器未创建")
+            self.manager.close()
+            GateBeforeRunScanner.release_constructor.set()
+            state = wait_for(self.manager, lambda item: item["status"] == "closed" and not item["running"])
+        self.assertFalse(GateBeforeRunScanner.run_called.is_set())
+        self.assertTrue(FakeBrowser.instances[0].closed)
+        self.assertFalse(self.manager.scan_stop_requested.is_set())
+        self.assertFalse(self.manager.close_after_scan.is_set())
+        self.assertEqual(state["status"], "closed")
+
     def test_completed_scan_result_keeps_its_status(self):
         self.ready_session()
         with patch("backend.scanner.JphooScanner", ImmediateScanner):
