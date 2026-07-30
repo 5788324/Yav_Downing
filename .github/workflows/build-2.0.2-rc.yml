@@ -1,9 +1,9 @@
 name: Build Yav 2.0.2 RC
 
 on:
-  push:
+  pull_request:
     branches:
-      - rc/2.0.2-build
+      - v2-rebuild
   workflow_dispatch:
 
 permissions:
