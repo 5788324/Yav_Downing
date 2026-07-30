@@ -1,0 +1,124 @@
+name: Build Yav 2.0.2 RC
+
+on:
+  push:
+    branches:
+      - rc/2.0.2-build
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: yav-2.0.2-rc
+  cancel-in-progress: false
+
+env:
+  SOURCE_SHA: fa31539e1bdaf524217f57cfe3524e09e00d16fd
+  RC_VERSION: 2.0.2
+
+jobs:
+  build-windows-rc:
+    name: Windows RC build
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out fixed merge SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - name: Verify source SHA
+        shell: pwsh
+        run: |
+          $actual = git rev-parse HEAD
+          if ($actual -ne $env:SOURCE_SHA) {
+            throw "Expected $env:SOURCE_SHA but checked out $actual"
+          }
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt pyinstaller
+
+      - name: Run release checks
+        run: |
+          python -m compileall backend tests yav_v2.py qa
+          python -m unittest discover -s tests -v
+          node --check backend/static/app.js
+          node --check backend/static/accessibility.js
+          node --test tests/test_scan_state.mjs
+          git diff --check
+
+      - name: Build executable
+        run: python -m PyInstaller --noconfirm --clean yav_v2.spec
+
+      - name: Start, verify and stop packaged Yav
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path 'dist\Yav-V2.exe').Path
+          $data = Join-Path $env:RUNNER_TEMP 'yav-2.0.2-rc-smoke'
+          $process = Start-Process -FilePath $exe -ArgumentList @('--data-dir', $data, '--port', '18765', '--no-browser') -PassThru -WindowStyle Hidden
+          try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(60)
+            $status = $null
+            do {
+              try {
+                $status = Invoke-RestMethod 'http://127.0.0.1:18765/api/app/status' -TimeoutSec 2
+              } catch {
+                $status = $null
+              }
+              if ($status.app -eq 'Yav') { break }
+              Start-Sleep -Milliseconds 250
+            } while ([DateTime]::UtcNow -lt $deadline)
+
+            if ($status.app -ne 'Yav') { throw 'Packaged Yav did not become ready' }
+            if ($status.version -ne $env:RC_VERSION) { throw "Expected version $env:RC_VERSION but got $($status.version)" }
+
+            & $exe --data-dir $data --shutdown
+            if (-not $process.WaitForExit(30000)) { throw 'Packaged Yav did not exit after shutdown' }
+
+            Start-Sleep -Milliseconds 500
+            try {
+              Invoke-RestMethod 'http://127.0.0.1:18765/api/app/status' -TimeoutSec 2 | Out-Null
+              throw 'Port 18765 remained available after shutdown'
+            } catch {
+              if ($_.Exception.Message -eq 'Port 18765 remained available after shutdown') { throw }
+            }
+          } finally {
+            if (-not $process.HasExited) { $process.Kill($true) }
+          }
+
+      - name: Create RC manifest and checksums
+        shell: pwsh
+        run: |
+          $out = 'dist\rc'
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          Copy-Item 'dist\Yav-V2.exe' "$out\Yav-V2-2.0.2-RC.exe"
+          $hash = (Get-FileHash "$out\Yav-V2-2.0.2-RC.exe" -Algorithm SHA256).Hash.ToUpperInvariant()
+          "$hash  Yav-V2-2.0.2-RC.exe" | Set-Content "$out\SHA256SUMS.txt" -Encoding ascii
+          @(
+            'Yav 2.0.2 Release Candidate'
+            "Source SHA: $env:SOURCE_SHA"
+            "Workflow run: $env:GITHUB_RUN_ID"
+            "Repository: $env:GITHUB_REPOSITORY"
+            "Built at UTC: $([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+            "SHA-256: $hash"
+            'Status: RC artifact only; not a formal release'
+          ) | Set-Content "$out\RC-MANIFEST.txt" -Encoding utf8
+
+      - name: Upload RC artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yav-2.0.2-RC-fa31539-windows-x64
+          path: dist/rc/
+          if-no-files-found: error
+          retention-days: 30
