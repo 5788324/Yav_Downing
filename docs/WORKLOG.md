@@ -274,3 +274,9 @@
 - 在 `C:\tmp\yav-20202-rc-copy-20260730` 的备份副本执行 schema 3→4、二次幂等、只读 BTIH/演员审计、候选 EXE API 启动、备份与 CLI 退出。数据库统计无删除，`PRAGMA integrity_check` 为 ok；没有操作唯一正式数据。
 - 本地检查：`compileall`、68 项 Python、两份 JS 语法检查、Node scan-state 与 `git diff --check` 通过。
 - 2026-07-30：CI run `30526114460` 最终全绿。修复 Windows `instance.lock` 首次竞争时 write/flush 抛出的 `PermissionError`，竞争者正常返回未获取锁，不再遗留子进程或占用锁文件；单实例跨进程回归通过。Draft PR #6 未合并、未发布。
+
+## 2026-07-30：RC 页面退出与单实例补验
+
+- 原隔离验收中，页面安全退出依赖原生 `confirm`，自动化桥接无法稳定确认。改为页面内确认框并增加前端契约断言。
+- 随后发现重复 `--no-browser` 启动的竞争者会停在 Windows 消息框；改为无浏览器模式下直接输出提示并退出，新增回归测试。
+- 修复版 EXE 真实验收：页面确认退出成功释放 18768；18769 重复启动后仅原实例监听，竞争者在等待窗口后退出；最后已通过 CLI 关闭隔离实例。

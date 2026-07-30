@@ -145,8 +145,13 @@ def run(argv=None) -> int:
             existing_port, ready = _wait_for_existing_instance(data_dir, port)
             if ready and not args.no_browser:
                 webbrowser.open(f"http://127.0.0.1:{existing_port}")
-            _message("Yav 已在运行，已打开现有资料库。" if ready else "Yav 正在启动，请稍后重新打开。",
-                     "Yav 已在运行" if ready else "Yav 正在启动")
+            message = "Yav 已在运行，已打开现有资料库。" if ready else "Yav 正在启动，请稍后重新打开。"
+            title = "Yav 已在运行" if ready else "Yav 正在启动"
+            if args.no_browser:
+                logger.info("%s", message)
+                print(message, file=sys.stderr)
+            else:
+                _message(message, title)
             return 0
         try:
             sys.argv = [sys.argv[0], "--data-dir", str(data_dir), "--port", str(port), "--instance-id", lock.instance_id]

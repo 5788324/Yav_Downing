@@ -130,3 +130,10 @@
 - 只读审计：`integrity_check=ok`、11,747 条 40 位规范 BTIH、0 Base32、0 非法 BTIH、0 片内/跨片规范重复、0 无效演员；候选 EXE 可启动 API，CLI 安全退出后端口与 runtime 均释放，并在临时副本创建升级后备份。
 - 仍为 Draft，未合并、未发布、未修改正式数据库、浏览器 Profile 或 2.0.1 资产。
 - 2026-07-30：Windows Python 3.11 CI 暴露首次并发创建 `instance.lock` 时 `flush()` 可抛出 `PermissionError`；现将其与非阻塞锁失败统一处理为“已有实例占用”。提交 `ee9a716` 后 run `30526114460` 的四组 Python、Playwright UI 与 Windows PyInstaller 全绿；Draft #6 继续保持未合并、未发布。
+
+## 2026-07-30：RC Windows 退出与单实例验收修复（未发布）
+
+- “安全退出 Yav”改为页面内确认框，避免浏览器原生确认框阻塞本地自动化或隐藏窗口场景；取消与确认均可访问，确认后调用既有受凭据保护的 shutdown API。
+- `--no-browser` 的重复启动不再显示 Windows 原生消息框；检测到已有实例时写入日志/标准错误并返回，避免隐藏验收启动留下无监听 EXE 进程。
+- 隔离副本实测：页面确认退出释放端口、runtime 与 EXE 进程；重复 `--no-browser` 启动在锁竞争窗口后只保留原服务实例。完整本地 Python 69 项、Node 2 项、JS 检查与 `git diff --check` 均通过。
+- 仍未合并或发布；正式数据与正式 8768 服务未修改。
