@@ -29,7 +29,7 @@ class JphooParserTests(unittest.TestCase):
         self.assertEqual(movie.cover_url, "https://www.jphoo.net/covers/abp.jpg")
 
     def test_api_candidates_keep_all_btih_and_best_size(self):
-        payload = {"rows": [{"name": "ABP-123 1.5 GB", "magnet": "magnet:?xt=urn:btih:AAA"}, {"name": "ABP-123 2 GB", "magnet": "magnet:?xt=urn:btih:AAA"}, {"name": "XYZ-999 700 MB", "magnet": "magnet:?xt=urn:btih:BBB"}]}
+        payload = {"rows": [{"name": "ABP-123 1.5 GB", "magnet": "magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}, {"name": "ABP-123 2 GB", "magnet": "magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}, {"name": "XYZ-999 700 MB", "magnet": "magnet:?xt=urn:btih:BBB"}]}
         rows = api_candidates(payload)
         self.assertEqual(len(rows), 2)
         self.assertEqual(next(row for row in rows if row.magnet.endswith("AAA")).size_bytes, 2 * 1024**3)
@@ -52,22 +52,22 @@ class JphooPersistenceTests(unittest.TestCase):
         with folder:
             movie = db.add_or_update_movie("ABP-123 Main Title", source="jphoo", source_url="https://www.jphoo.net/works/1")
             result = persist_candidates(db, movie, "ABP-123 Main Title", "https://www.jphoo.net/works/1", [
-                JphooCandidate("magnet:?xt=urn:btih:AAAA", 2 * 1024**3, "ABP-123 Main Title 1080p"),
-                JphooCandidate("magnet:?xt=urn:btih:BBBB", 1024**3, "XYZ-999 Other Title 720p"),
-                JphooCandidate("magnet:?xt=urn:btih:CCCC", None, "1080p mp4"),
+                JphooCandidate("magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", 2 * 1024**3, "ABP-123 Main Title 1080p"),
+                JphooCandidate("magnet:?xt=urn:btih:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", 1024**3, "XYZ-999 Other Title 720p"),
+                JphooCandidate("magnet:?xt=urn:btih:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", None, "1080p mp4"),
             ])
             self.assertEqual((result["matched_current"], result["attached_other"], result["unmatched"]), (1, 1, 1))
             self.assertEqual(db.list_movies(page_size=20)["total"], 2)
-            again = persist_candidates(db, movie, "ABP-123 Main Title", "https://www.jphoo.net/works/1", [JphooCandidate("magnet:?xt=urn:btih:AAAA", 2 * 1024**3, "ABP-123 Main Title")])
+            again = persist_candidates(db, movie, "ABP-123 Main Title", "https://www.jphoo.net/works/1", [JphooCandidate("magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", 2 * 1024**3, "ABP-123 Main Title")])
             self.assertEqual(again["new_magnets"], 0)
 
     def test_javdb_btih_gets_jphoo_source_association(self):
         folder, db = self.make_db()
         with folder:
             movie = db.add_or_update_movie("ABP-123 Main", source="javdb", source_url="https://javdb.com/v/a")
-            db.add_magnet(movie, "magnet:?xt=urn:btih:SAME", "javdb", "https://javdb.com/v/a", None)
+            db.add_magnet(movie, "magnet:?xt=urn:btih:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", "javdb", "https://javdb.com/v/a", None)
             db.add_or_update_movie("ABP-123 Main", source="jphoo", source_url="https://www.jphoo.net/works/1")
-            persist_candidates(db, movie, "ABP-123 Main", "https://www.jphoo.net/works/1", [JphooCandidate("magnet:?xt=urn:btih:SAME", 100, "ABP-123 Main")])
+            persist_candidates(db, movie, "ABP-123 Main", "https://www.jphoo.net/works/1", [JphooCandidate("magnet:?xt=urn:btih:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", 100, "ABP-123 Main")])
             detail = db.get_movie(movie)
             self.assertEqual(len(detail["magnets"]), 1)
             self.assertEqual({item["source"] for item in detail["magnets"][0]["sources"]}, {"javdb", "jphoo"})

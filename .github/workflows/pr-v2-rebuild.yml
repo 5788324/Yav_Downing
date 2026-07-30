@@ -1,0 +1,113 @@
+name: Yav V2 rebuild PR verification
+
+on:
+  pull_request:
+    branches: [v2-rebuild]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python-and-static:
+    name: Python ${{ matrix.python }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Python dependencies
+        run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml playwright pyinstaller
+      - name: Compile Python
+        run: python -m compileall backend tests yav_v2.py qa
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Check JavaScript
+        run: |
+          node --check backend/static/app.js
+          node --check backend/static/accessibility.js
+          node --test tests/test_scan_state.mjs
+      - name: Check whitespace
+        run: git diff --check
+
+  playwright-ui:
+    name: Playwright UI full chain
+    runs-on: ubuntu-latest
+    needs: python-and-static
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml playwright
+          npm install --no-save @playwright/test@1.54.1 @axe-core/playwright@4.10.2
+          npx playwright install --with-deps chromium
+      - name: Create fixture and start local service
+        run: |
+          PYTHONPATH=. python qa/ui_seed.py "$RUNNER_TEMP/yav-ui-data"
+          python -m backend.app --data-dir "$RUNNER_TEMP/yav-ui-data" --port 18765 > "$RUNNER_TEMP/yav-ui-server.log" 2>&1 &
+          for attempt in $(seq 1 80); do curl --fail --silent http://127.0.0.1:18765/api/app/status > /dev/null && exit 0; sleep 0.25; done
+          cat "$RUNNER_TEMP/yav-ui-server.log"
+          exit 1
+      - name: Run UI full chain
+        env:
+          BASE_URL: http://127.0.0.1:18765
+        run: npx playwright test qa/ui_full_chain.spec.js --workers=1 --reporter=line
+      - name: Upload UI report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-ui-report
+          path: |
+            playwright-report/
+            test-results/
+            ${{ runner.temp }}/yav-ui-server.log
+          if-no-files-found: warn
+
+  windows-package-smoke:
+    name: Windows PyInstaller smoke
+    runs-on: windows-latest
+    needs: python-and-static
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install build dependencies
+        run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml playwright pyinstaller
+      - name: Build executable
+        run: python -m PyInstaller --noconfirm --clean yav_v2.spec
+      - name: Start and stop packaged Yav
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path 'dist\Yav-V2.exe').Path
+          $data = Join-Path $env:RUNNER_TEMP 'yav-package-smoke'
+          $process = Start-Process -FilePath $exe -ArgumentList @('--data-dir', $data, '--port', '18765', '--no-browser') -PassThru -WindowStyle Hidden
+          try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(45)
+            do {
+              try { $status = Invoke-RestMethod 'http://127.0.0.1:18765/api/app/status' -TimeoutSec 2 } catch { $status = $null }
+              if ($status.app -eq 'Yav') { break }
+              Start-Sleep -Milliseconds 250
+            } while ([DateTime]::UtcNow -lt $deadline)
+            if ($status.app -ne 'Yav') { throw 'Packaged Yav did not become ready' }
+            & $exe --data-dir $data --shutdown
+            if (-not $process.WaitForExit(30000)) { throw 'Packaged Yav did not exit after shutdown' }
+          } finally {
+            if (-not $process.HasExited) { $process.Kill($true) }
+          }

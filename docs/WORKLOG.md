@@ -212,3 +212,65 @@
 - 真实 UI 验收：组合筛选、分页、收藏架与资料册视图切换保持状态；详情页显示来源、大小排序、短 BTIH、复制与来源链接；复制提示成功。手动编辑后时长 123 分钟在重新打开后仍存在，手动字段被保护。
 - 900px 窄窗口 `scrollWidth == clientWidth`，无横向滚动；页面安全退出和 CLI 安全退出均释放端口、API 与 runtime 文件。
 - 自动检查：`compileall`、53 项单元测试、`node --check` 与 `git diff --check` 通过。创建 `yav-v2-backup-20260729-000806`，仅含 SQLite 快照；未提交数据库、截图、日志、Cookie 或浏览器资料。
+
+## 2026-07-29 审查修复（未发布）
+
+- 修复扫描中途停止时错误推进页面断点：仅在整页处理完成后更新 `last_completed_page`，继续扫描会重入未完成页。
+- 新增 `scan_failures` 失败 URL 队列，记录来源、系列、URL、页码、尝试次数、最后错误和解决时间；继续扫描优先重试未解决 URL。
+- 编辑资料仅在字段真实变化时加入 `manual_fields`；演员按标准化集合比较。
+- JavDB/JPHOO 前端扫描状态改为分别追踪；JavDB 同一详情页的资料与磁链共用一次 HTTP 响应。
+- 实测 RK Prime 完整重扫：资料库从 1498/1498/11747 增至 1515 影片、1515 来源页、11815 磁链；1,430 次处理，1,317 成功，110 个来源 URL 因 `JavDB 请求连续失败` 仍在失败队列，不能宣称全量完成。
+
+- 2026-07-29：完成 2.0.2 审查修复：BTIH 严格规范化、失败 URL 恢复、扫描互斥/停止 ID 校验、来源配置保护、来源轮询容错、请求乱序与日期/演员筛选修复；59 项 Python 与 2 项 Node 测试通过，未发布。
+
+- 新增只读完整性审计：python -m backend.audit_v2 --db <library.db>，报告跨影片重复 BTIH 和无效演员关联；本机验证 1517 影片、11832 磁链，两类问题均为 0。
+
+- 2026-07-29：全量扫描启动时事务化清零旧断点，并新增回归测试，防止立即停止后继续扫描错误跳至旧页码。
+
+## 2026-07-29：资料库页面空白排障与修复
+
+- 用户反馈 8768 页面看不到资料库影片。只读检查确认 `%LOCALAPPDATA%\Yav\v2\library.db` 有 1,517 影片、1,517 来源页和 11,832 磁链，故不是导入或扫描丢数据。
+- 发现服务未监听旧页面的端口；重新启动后又发现 `backend/static/app.js` 中来源操作请求被错误写成 `/api/sources///` 的无效正则表达式，浏览器因此停止执行整份前端脚本。
+- 以保留 JavaScript 模板变量的逐行方式修复为 `/api/sources/${source}/${id}/${action}`，新增静态断言，安全重启至 8768。
+- 真实 UI 验收：首页加载 36 张卡片，显示“当前筛选找到 1,517 部影片”；未发生扫描、迁移、资料删除或数据库手工修改。
+
+## 2026-07-29：扫描并发与冲突响应补强（未发布）
+
+- JPHOO 在扫描命令进入专用线程前即保留 `starting/scanning` 状态；第二个启动请求会被拒绝，避免重复排队。
+- 停止请求的系列 ID 不匹配时返回 HTTP 409；来源 URL 重复或扫描中修改来源配置也返回 HTTP 409，前端可显示明确冲突提示。
+- 新增 JPHOO 启动预留和 API 冲突行为测试；完整回归为 Python 61 项、Node 2 项通过。
+- 真实 V2 SQLite 只读审计：1,517 影片、11,832 磁链；跨影片重复 BTIH 与无效演员关联均为 0。
+## 2026-07-29：starting 状态来源配置保护（未发布）
+
+- API 在扫描刚进入 starting、尚未写入 scan_runs 时，也拒绝修改该系列来源配置并返回 HTTP 409。
+- JPHOO 活动扫描判定覆盖已排队的 starting 状态；完整 Python 回归 61 项和 Node 2 项通过。
+
+## 2026-07-29：来源状态过期提示（未发布）
+
+- 来源状态轮询连续三次失败时，页面会提示当前进度可能已过期；下一次成功读取后自动清零。
+- 不停止或干扰后台扫描；Python 61 项与 Node 2 项回归通过。
+
+## 2026-07-29：本机前端缓存恢复（未发布）
+
+- 静态前端资源改为 no-store，首页为 app.js 注入文件版本查询参数，避免同一 localhost 地址重启后浏览器继续执行旧 ES 模块。
+- 首页在 runtime 尚未注入时安全渲染；新增 HTTP 响应头与版本化 URL 测试。
+- Python 63 项、Node 2 项通过；真实资料库仍为 1,517 部影片。
+
+## 2026-07-29：来源 UI、扫描状态与 CI 验收修复
+
+- 修复 `sourceAction()` 在 busy 状态下无法刷新卡片、取消编辑属性判断及取消删除后按钮禁用的问题。
+- 登录中间态保持轮询；扫描启动立即记为 active；关闭详情会废弃未完成请求。
+- 修复 JPHOO starting 被旧扫描覆盖与 starting 后立即停止仍启动扫描的竞态；来源 URL 更换时断点归零、旧失败 URL 标记 superseded。
+- 将 Playwright 的分页、来源扫描文案、确认框和模拟响应字段更新为与当前 UI/API 契约一致；删除 CI 对测试文件的动态改写。
+- 本机完整 Playwright：1 passed（1.1 分钟）；Python 64 项、Node 2 项通过。GitHub Actions run 30468450208：四组 Python、Playwright UI、Windows PyInstaller 冒烟全部通过。
+- 未提交数据库、封面、Cookie、日志、截图或 node_modules；未合并、未发布。
+
+- 2026-07-30：RC 小型回归修复。增加临时 schema 3 数据库迁移测试，确认等价 BTIH 合并后来源关系、有效大小和最早发现时间保留，非法 BTIH 不删除；本地 65 项测试、JS 检查和扫描状态测试通过。
+
+## 2026-07-30 — 2.0.2 RC 收口与隔离验收
+
+- 核对 Draft PR #6：重跑后 GitHub CI 全绿（四组 Python、Playwright UI、Windows PyInstaller）。首次 Windows EXE 就绪超时未能在合并同树、本机空目录复现，因此没有添加非证据驱动的修复。
+- 新增两项 JPHOO 确定性 Event/barrier 回归：scanner 创建后、run 前 stop/close；验证取消不进入 `run()`，关闭释放 FakeBrowser，Event 不残留。
+- 在 `C:\tmp\yav-20202-rc-copy-20260730` 的备份副本执行 schema 3→4、二次幂等、只读 BTIH/演员审计、候选 EXE API 启动、备份与 CLI 退出。数据库统计无删除，`PRAGMA integrity_check` 为 ok；没有操作唯一正式数据。
+- 本地检查：`compileall`、68 项 Python、两份 JS 语法检查、Node scan-state 与 `git diff --check` 通过。
+- 2026-07-30：CI run `30526114460` 最终全绿。修复 Windows `instance.lock` 首次竞争时 write/flush 抛出的 `PermissionError`，竞争者正常返回未获取锁，不再遗留子进程或占用锁文件；单实例跨进程回归通过。Draft PR #6 未合并、未发布。

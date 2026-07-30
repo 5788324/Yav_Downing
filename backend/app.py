@@ -194,14 +194,17 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/":
-            bootstrap = json.dumps({"instanceId": self.runtime.instance_id, "shutdownToken": self.runtime.shutdown_token}, ensure_ascii=False)
-            content = (STATIC_DIR / "index.html").read_text(encoding="utf-8").replace("</body>", f"<script>window.__YAV_BOOTSTRAP__ = {bootstrap};</script></body>")
+            runtime = self.runtime
+            bootstrap = json.dumps({"instanceId": runtime.instance_id if runtime else "", "shutdownToken": runtime.shutdown_token if runtime else ""}, ensure_ascii=False)
+            app_version = (STATIC_DIR / "app.js").stat().st_mtime_ns
+            content = (STATIC_DIR / "index.html").read_text(encoding="utf-8").replace('src="/assets/app.js"', f'src="/assets/app.js?v={app_version}"').replace("</body>", f"<script>window.__YAV_BOOTSTRAP__ = {bootstrap};</script></body>")
             payload = content.encode("utf-8")
             self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(payload))); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(payload)
             return
         if path.startswith("/assets/"):
             filename = Path(path.removeprefix("/assets/")).name
-            self._serve_file(STATIC_DIR / filename)
+            # 本地应用可能在同一地址重启到新版本，前端资源不能让浏览器沿用旧脚本。
+            self._serve_file(STATIC_DIR / filename, cache=False)
             return
         self.send_error(404)
 
@@ -263,10 +266,10 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 if not self.scans: raise ValueError("扫描器未初始化")
                 action,series_id=action_match.group(2),int(action_match.group(1))
-                result=self.scans.stop() if action == "stop" else self.scans.start(series_id, action == "scan")
+                result=self.scans.stop(series_id) if action == "stop" else self.scans.start(series_id, action == "scan")
                 self._json(result, 202)
             except (ValueError, TypeError) as exc:
-                self._json({"error":str(exc)},400)
+                self._json({"error":str(exc)}, 409 if action == "stop" and "不是当前" in str(exc) else 400)
             return
 
         login_action = re.fullmatch(r"/api/sources/jphoo/login/(open|check|close)", urlparse(self.path).path)
@@ -285,23 +288,27 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 if not self.jphoo_scans: raise ValueError("JPHOO 扫描器未初始化")
                 action,series_id=jphoo_action.group(2),int(jphoo_action.group(1))
-                self._json(self.jphoo_scans.stop() if action == "stop" else self.jphoo_scans.start(series_id, action == "scan"), 202)
+                self._json(self.jphoo_scans.stop(series_id) if action == "stop" else self.jphoo_scans.start(series_id, action == "scan"), 202)
             except (ValueError, TypeError) as exc:
-                self._json({"error":str(exc)},400)
+                self._json({"error":str(exc)}, 409 if action == "stop" and "不是当前" in str(exc) else 400)
             return
 
         if urlparse(self.path).path == "/api/sources/jphoo":
             try:
-                payload=self._source_payload(self._read_json(), "jphoo"); self._json({"id": self.database.save_source_series(**payload)}, 201)
+                payload = self._source_payload(self._read_json(), "jphoo")
+                if payload.get("series_id") and self.jphoo_scans and self.jphoo_scans.is_running_series(payload["series_id"]): raise ValueError("该系列正在扫描，不能修改网址或启用状态")
+                self._json({"id": self.database.save_source_series(**payload)}, 201)
             except (ValueError, TypeError) as exc:
-                self._json({"error":str(exc)}, 400)
+                self._json({"error":str(exc)}, 409 if "已经存在" in str(exc) or "正在扫描" in str(exc) else 400)
             return
 
         if urlparse(self.path).path == "/api/sources/javdb":
             try:
-                self._json({"id": self.database.save_source_series(**self._source_payload(self._read_json(), "javdb"))}, 201)
+                payload = self._source_payload(self._read_json(), "javdb")
+                if payload.get("series_id") and self.scans and self.scans.is_running_series(payload["series_id"]): raise ValueError("该系列正在扫描，不能修改网址或启用状态")
+                self._json({"id": self.database.save_source_series(**payload)}, 201)
             except (ValueError, TypeError) as exc:
-                self._json({"error": str(exc)}, 400)
+                self._json({"error": str(exc)}, 409 if "已经存在" in str(exc) or "正在扫描" in str(exc) else 400)
             return
 
         match = re.fullmatch(r"/api/movies/(\d+)/favorite", urlparse(self.path).path)

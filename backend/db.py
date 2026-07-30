@@ -1,6 +1,8 @@
 """Yav V2 的 SQLite 数据层。"""
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import re
 import sqlite3
@@ -30,23 +32,30 @@ def normalize_title(value: str) -> str:
     return re.sub(r"\s*(?:\||[-–—])\s*(?:javdb|jphoo)\s*$", "", text).strip()
 
 
+INVALID_METADATA_VALUES = frozenset({"首页", "上一页", "下一页", "登录", "注册", "查看更多", "影片信息", "演员列表", "磁力下载", "返回顶部", "查看全部作品", "推荐", "推薦", "有碼", "有码", "歐美", "欧美", "演員", "演员", "無碼", "无码"})
+
 def is_invalid_metadata(value: str) -> bool:
     clean = re.sub(r"\s+", " ", value or "").strip()
-    if not clean:
-        return True
-    invalid = {"首页", "上一页", "下一页", "登录", "注册", "查看更多", "影片信息", "演员列表", "磁力下载", "返回顶部", "查看全部作品", "推荐", "推薦", "有碼", "有码", "歐美", "欧美", "演員", "演员", "無碼", "无码"}
-    return clean in invalid or clean.startswith("查看") and clean.endswith("全部作品")
+    return not clean or clean in INVALID_METADATA_VALUES or (clean.startswith("查看") and clean.endswith("全部作品"))
+
+def normalize_btih(value: str) -> str:
+    token = (value or "").strip()
+    if re.fullmatch(r"[0-9a-fA-F]{40}", token):
+        return token.upper()
+    if re.fullmatch(r"[A-Z2-7a-z]{32}", token):
+        try:
+            return base64.b32decode(token.upper()).hex().upper()
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("磁链 BTIH Base32 无效") from exc
+    raise ValueError("磁链 BTIH 必须是 40 位十六进制或 32 位 Base32")
 
 def extract_btih(magnet: str) -> str:
     for value in parse_qs(urlparse(magnet).query).get("xt", []):
-        found = re.fullmatch(r"urn:btih:([A-Za-z0-9]+)", value, re.I)
-        if found:
-            return found.group(1).upper()
-    found = re.search(r"urn:btih:([A-Za-z0-9]+)", magnet or "", re.I)
-    if found:
-        return found.group(1).upper()
+        found = re.fullmatch(r"urn:btih:([^&/]+)", value, re.I)
+        if found: return normalize_btih(found.group(1))
+    found = re.search(r"urn:btih:([^&\s/]+)", magnet or "", re.I)
+    if found: return normalize_btih(found.group(1))
     raise ValueError("磁链缺少有效 BTIH")
-
 
 class LibraryDatabase:
     def __init__(self, path: str | Path):
@@ -148,6 +157,12 @@ CREATE TABLE IF NOT EXISTS scan_runs(
  new_movies INTEGER NOT NULL DEFAULT 0, new_magnets INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0,
  message TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL, finished_at TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS idx_source_series_source ON source_series(source,enabled);
+CREATE TABLE IF NOT EXISTS scan_failures(
+ id INTEGER PRIMARY KEY, source TEXT NOT NULL, series_id INTEGER NOT NULL REFERENCES source_series(id) ON DELETE CASCADE,
+ source_url TEXT NOT NULL, page INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 1,
+ last_error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, resolved_at TEXT NOT NULL DEFAULT '',
+ UNIQUE(source,series_id,source_url));
+CREATE INDEX IF NOT EXISTS idx_scan_failures_unresolved ON scan_failures(source,series_id,resolved_at,page,id);
                 """
             )
             for statement in (
@@ -162,12 +177,47 @@ CREATE INDEX IF NOT EXISTS idx_source_series_source ON source_series(source,enab
                     db.execute(statement)
                 except sqlite3.OperationalError:
                     pass
-            db.execute("UPDATE schema_meta SET value='3' WHERE key='schema_version'")
-            db.execute("UPDATE scan_runs SET status='interrupted', finished_at=? WHERE status IN ('running','stopping')", (self.now(),))
-            invalid = ("推荐", "推薦", "有碼", "有码", "歐美", "欧美", "演員", "演员", "無碼", "无码")
+            version_row = db.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()
+            previous_version = int(version_row[0]) if version_row and str(version_row[0]).isdigit() else 1
+            if previous_version < 4:
+                self._migrate_btih_to_v4(db)
+            db.execute("UPDATE schema_meta SET value='4' WHERE key='schema_version'")
+            db.execute("UPDATE scan_runs SET status='interrupted', finished_at=? WHERE status IN ('starting','running','stopping')", (self.now(),))
+            invalid = tuple(sorted(INVALID_METADATA_VALUES))
             placeholders = ",".join("?" for _ in invalid)
             db.execute(f"DELETE FROM movie_actresses WHERE actress_id IN (SELECT id FROM actresses WHERE name IN ({placeholders})) AND movie_id IN (SELECT id FROM movies WHERE manual_fields NOT LIKE '%\"actresses\"%')", invalid)
             db.execute("DELETE FROM actresses WHERE NOT EXISTS (SELECT 1 FROM movie_actresses WHERE movie_actresses.actress_id=actresses.id)")
+
+    @staticmethod
+    def _migrate_btih_to_v4(db: sqlite3.Connection) -> None:
+        """将 schema 3 的历史 BTIH 规范化；无效值保留，跨影片只留给审计报告。"""
+        before = db.execute("PRAGMA integrity_check").fetchone()[0]
+        if before != "ok":
+            raise RuntimeError(f"BTIH 迁移前数据库完整性检查失败：{before}")
+        groups: dict[tuple[int, str], list[sqlite3.Row]] = {}
+        for row in db.execute("SELECT id,movie_id,btih,size_bytes,discovered_at FROM magnets ORDER BY discovered_at,id"):
+            try:
+                canonical = normalize_btih(row["btih"])
+            except ValueError:
+                continue
+            groups.setdefault((row["movie_id"], canonical), []).append(row)
+        for (movie_id, canonical), rows in groups.items():
+            keeper = rows[0]
+            keeper_id = keeper["id"]
+            valid_sizes = [row["size_bytes"] for row in rows if row["size_bytes"] and row["size_bytes"] > 0]
+            size = max(valid_sizes) if valid_sizes else None
+            earliest = min((row["discovered_at"] or "") for row in rows)
+            for duplicate in rows[1:]:
+                for source in db.execute("SELECT source_entry_id FROM magnet_sources WHERE magnet_id=?", (duplicate["id"],)):
+                    db.execute("INSERT OR IGNORE INTO magnet_sources(magnet_id,source_entry_id) VALUES(?,?)", (keeper_id, source["source_entry_id"]))
+                db.execute("DELETE FROM magnets WHERE id=?", (duplicate["id"],))
+            db.execute(
+                "UPDATE magnets SET btih=?,size_bytes=?,discovered_at=? WHERE id=? AND movie_id=?",
+                (canonical, size, earliest, keeper_id, movie_id),
+            )
+        after = db.execute("PRAGMA integrity_check").fetchone()[0]
+        if after != "ok":
+            raise RuntimeError(f"BTIH 迁移后数据库完整性检查失败：{after}")
 
     @staticmethod
     def now() -> str:
@@ -235,6 +285,12 @@ CREATE INDEX IF NOT EXISTS idx_source_series_source ON source_series(source,enab
             if movie:
                 movie_id = movie["id"]
                 manual = self._manual_fields(movie)
+                # 已绑定来源页重新解析到更正标题时，只在没有人工标题、没有其他来源页且不与现有影片冲突时更新。
+                if source_movie and title != movie["title"] and "title" not in manual:
+                    source_count = db.execute("SELECT COUNT(*) FROM source_entries WHERE movie_id=?", (movie_id,)).fetchone()[0]
+                    title_conflict = db.execute("SELECT 1 FROM movies WHERE normalized_title=? AND id<>?", (normalized, movie_id)).fetchone()
+                    if source_count == 1 and not title_conflict:
+                        db.execute("UPDATE movies SET title=?,normalized_title=?,updated_at=? WHERE id=?", (title, normalized, now, movie_id))
                 updates = {
                     key: (
                         value
@@ -560,7 +616,7 @@ CREATE INDEX IF NOT EXISTS idx_source_series_source ON source_series(source,enab
             ]
             actresses = [
                 row[0]
-                for row in db.execute("SELECT name FROM actresses ORDER BY name")
+                for row in db.execute("SELECT a.name FROM actresses a WHERE EXISTS(SELECT 1 FROM movie_actresses ma WHERE ma.actress_id=a.id) ORDER BY a.name")
             ]
             sources = [
                 row[0]
@@ -588,34 +644,17 @@ CREATE INDEX IF NOT EXISTS idx_source_series_source ON source_series(source,enab
             }
 
     def update_movie(self, movie_id: int, changes: dict[str, Any]) -> dict[str, Any] | None:
-        allowed = {
-            "title",
-            "cover_url",
-            "studio",
-            "series",
-            "release_date",
-            "duration_minutes",
-            "actresses",
-            "favorite",
-        }
+        allowed = {"title", "cover_url", "studio", "series", "release_date", "duration_minutes", "actresses", "favorite"}
         changes = {key: value for key, value in changes.items() if key in allowed}
         if not changes:
             return self.get_movie(movie_id)
-
         with self.connect() as db:
             movie = db.execute("SELECT * FROM movies WHERE id=?", (movie_id,)).fetchone()
             if not movie:
                 return None
             manual = self._manual_fields(movie)
             updates: dict[str, Any] = {}
-            for key in (
-                "title",
-                "cover_url",
-                "studio",
-                "series",
-                "release_date",
-                "duration_minutes",
-            ):
+            for key in ("title", "cover_url", "studio", "series", "release_date", "duration_minutes"):
                 if key not in changes:
                     continue
                 value = changes[key]
@@ -623,78 +662,49 @@ CREATE INDEX IF NOT EXISTS idx_source_series_source ON source_series(source,enab
                     value = str(value or "").strip()
                     if not value:
                         raise ValueError("影片名不能为空")
-                    updates["normalized_title"] = normalize_title(value)
                 elif key == "duration_minutes":
-                    if value in (None, ""):
-                        value = None
-                    else:
-                        value = int(value)
-                        if not 0 <= value <= 1440:
-                            raise ValueError("时长必须在 0 到 1440 分钟之间")
+                    value = None if value in (None, "") else int(value)
+                    if value is not None and not 0 <= value <= 1440:
+                        raise ValueError("时长必须在 0 到 1440 分钟之间")
                 else:
                     value = str(value or "").strip()
                     if key == "release_date" and value:
-                        try:
-                            datetime.strptime(value, "%Y-%m-%d")
-                        except ValueError as exc:
-                            raise ValueError("日期必须是 YYYY-MM-DD 格式") from exc
+                        try: datetime.strptime(value, "%Y-%m-%d")
+                        except ValueError as exc: raise ValueError("日期必须是 YYYY-MM-DD 格式") from exc
                     if key == "cover_url" and value and not value.startswith(("https://", "http://")):
                         raise ValueError("封面网址必须是 http 或 https 地址")
-                updates[key] = value
-                manual.add(key)
-
+                # 编辑表单会提交整份资料：只有实际改变的字段才被手动保护。
+                if movie[key] != value:
+                    updates[key] = value
+                    if key == "title": updates["normalized_title"] = normalize_title(value)
+                    manual.add(key)
             if "favorite" in changes:
-                updates["favorite"] = int(bool(changes["favorite"]))
-
-            if updates:
-                updates["manual_fields"] = json.dumps(
-                    sorted(manual), ensure_ascii=False
-                )
-                updates["updated_at"] = self.now()
-                assignment = ",".join(f"{key}=?" for key in updates)
-                db.execute(
-                    f"UPDATE movies SET {assignment} WHERE id=?",
-                    list(updates.values()) + [movie_id],
-                )
-
+                favorite = int(bool(changes["favorite"]))
+                if movie["favorite"] != favorite: updates["favorite"] = favorite
+            clean: list[tuple[str, str]] = []
+            actresses_changed = False
             if "actresses" in changes:
                 raw = changes["actresses"]
-                if isinstance(raw, str):
-                    names = re.split(r"[,，、\n]+", raw)
-                else:
-                    names = list(raw or [])
-                clean: list[tuple[str, str]] = []
+                names = re.split(r"[,，、\n]+", raw) if isinstance(raw, str) else list(raw or [])
                 seen: set[str] = set()
                 for name in names:
-                    name = re.sub(r"\s+", " ", str(name or "")).strip()
-                    normalized = normalize_title(name)
-                    if name and normalized not in seen:
-                        clean.append((name, normalized))
-                        seen.add(normalized)
+                    name = re.sub(r"\s+", " ", str(name or "")).strip(); normalized = normalize_title(name)
+                    if name and normalized not in seen: clean.append((name, normalized)); seen.add(normalized)
+                current = {row["normalized_name"] for row in db.execute("SELECT a.normalized_name FROM actresses a JOIN movie_actresses ma ON ma.actress_id=a.id WHERE ma.movie_id=?", (movie_id,))}
+                actresses_changed = current != {normalized for _, normalized in clean}
+                if actresses_changed: manual.add("actresses")
+            if updates or actresses_changed:
+                updates["manual_fields"] = json.dumps(sorted(manual), ensure_ascii=False)
+                updates["updated_at"] = self.now()
+                assignment = ",".join(f"{key}=?" for key in updates)
+                db.execute(f"UPDATE movies SET {assignment} WHERE id=?", list(updates.values()) + [movie_id])
+            if actresses_changed:
                 db.execute("DELETE FROM movie_actresses WHERE movie_id=?", (movie_id,))
                 for name, normalized in clean:
-                    db.execute(
-                        "INSERT OR IGNORE INTO actresses(name,normalized_name) VALUES(?,?)",
-                        (name, normalized),
-                    )
-                    actress_id = db.execute(
-                        "SELECT id FROM actresses WHERE normalized_name=?", (normalized,)
-                    ).fetchone()["id"]
-                    db.execute(
-                        "INSERT OR IGNORE INTO movie_actresses VALUES(?,?)",
-                        (movie_id, actress_id),
-                    )
-                manual.add("actresses")
-                db.execute(
-                    "UPDATE movies SET manual_fields=?,updated_at=? WHERE id=?",
-                    (
-                        json.dumps(sorted(manual), ensure_ascii=False),
-                        self.now(),
-                        movie_id,
-                    ),
-                )
+                    db.execute("INSERT OR IGNORE INTO actresses(name,normalized_name) VALUES(?,?)", (name, normalized))
+                    actress_id = db.execute("SELECT id FROM actresses WHERE normalized_name=?", (normalized,)).fetchone()["id"]
+                    db.execute("INSERT OR IGNORE INTO movie_actresses VALUES(?,?)", (movie_id, actress_id))
         return self.get_movie(movie_id)
-
     def set_favorite(self, movie_id, favorite):
         with self.connect() as db:
             cursor = db.execute(
@@ -714,6 +724,21 @@ CREATE INDEX IF NOT EXISTS idx_source_series_source ON source_series(source,enab
         return path if path.is_file() else None
 
 
+    def record_scan_failure(self, source: str, series_id: int, source_url: str, page: int, error: str) -> None:
+        now = self.now()
+        with self.connect() as db:
+            db.execute("""INSERT INTO scan_failures(source,series_id,source_url,page,attempts,last_error,created_at,updated_at,resolved_at)
+                          VALUES(?,?,?,?,1,?,?,?, '')
+                          ON CONFLICT(source,series_id,source_url) DO UPDATE SET page=excluded.page,attempts=scan_failures.attempts+1,last_error=excluded.last_error,updated_at=excluded.updated_at,resolved_at=''""", (source, series_id, source_url, int(page), str(error)[:500], now, now))
+
+    def list_unresolved_scan_failures(self, source: str, series_id: int) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            return [dict(row) for row in db.execute("SELECT * FROM scan_failures WHERE source=? AND series_id=? AND resolved_at='' ORDER BY page,id", (source, series_id)).fetchall()]
+
+    def resolve_scan_failure(self, source: str, series_id: int, source_url: str) -> bool:
+        now = self.now()
+        with self.connect() as db:
+            return db.execute("UPDATE scan_failures SET resolved_at=?,updated_at=? WHERE source=? AND series_id=? AND source_url=? AND resolved_at=''", (now, now, source, series_id, source_url)).rowcount > 0
     def list_source_series(self, source="javdb"):
         with self.connect() as db:
             rows = db.execute("""SELECT ss.*, sr.status AS scan_status, sr.current_page, sr.discovered, sr.processed_count, sr.new_movies, sr.new_magnets, sr.failures, sr.matched_current, sr.attached_other_movies, sr.unmatched_candidates, sr.last_error, sr.finished_at AS last_run_finished_at FROM source_series ss LEFT JOIN scan_runs sr ON sr.id=(SELECT id FROM scan_runs WHERE series_id=ss.id ORDER BY id DESC LIMIT 1) WHERE ss.source=? ORDER BY ss.name,ss.id""", (source,)).fetchall()
@@ -726,7 +751,7 @@ CREATE INDEX IF NOT EXISTS idx_source_series_source ON source_series(source,enab
 
     def is_source_series_scanning(self, series_id, source):
         with self.connect() as db:
-            row = db.execute("SELECT 1 FROM scan_runs sr JOIN source_series ss ON ss.id=sr.series_id WHERE sr.series_id=? AND ss.source=? AND sr.status IN ('running','stopping') ORDER BY sr.id DESC LIMIT 1", (series_id, source)).fetchone()
+            row = db.execute("SELECT 1 FROM scan_runs sr JOIN source_series ss ON ss.id=sr.series_id WHERE sr.series_id=? AND ss.source=? AND sr.status IN ('starting','running','stopping') ORDER BY sr.id DESC LIMIT 1", (series_id, source)).fetchone()
             return bool(row)
     def set_scan_stopping(self, series_id, source):
         with self.connect() as db:
@@ -744,14 +769,26 @@ CREATE INDEX IF NOT EXISTS idx_source_series_source ON source_series(source,enab
         profile_dir = None if profile_dir is None else str(profile_dir).strip()
         with self.connect() as db:
             if series_id:
-                if not db.execute("SELECT 1 FROM source_series WHERE id=? AND source=?", (series_id, source)).fetchone(): raise ValueError("来源系列不存在")
+                row = db.execute("SELECT * FROM source_series WHERE id=? AND source=?", (series_id, source)).fetchone()
+                if not row: raise ValueError("来源系列不存在")
+                if db.execute("SELECT 1 FROM scan_runs WHERE series_id=? AND status IN ('starting','running','stopping')", (series_id,)).fetchone():
+                    raise ValueError("该系列正在扫描，不能修改网址或启用状态")
+                url_changed = row["url"] != url
+                checkpoint = 0 if url_changed else row["last_completed_page"]
                 if profile_dir is None:
-                    db.execute("UPDATE source_series SET name=?,url=?,enabled=? WHERE id=? AND source=?", (name,url,int(enabled),series_id,source))
+                    db.execute("UPDATE source_series SET name=?,url=?,enabled=?,last_completed_page=? WHERE id=? AND source=?", (name,url,int(enabled),checkpoint,series_id,source))
                 else:
-                    db.execute("UPDATE source_series SET name=?,url=?,enabled=?,profile_dir=? WHERE id=? AND source=?", (name,url,int(enabled),profile_dir,series_id,source))
+                    db.execute("UPDATE source_series SET name=?,url=?,enabled=?,profile_dir=?,last_completed_page=? WHERE id=? AND source=?", (name,url,int(enabled),profile_dir,checkpoint,series_id,source))
+                if url_changed:
+                    now = self.now()
+                    db.execute("UPDATE scan_failures SET resolved_at=?,updated_at=?,last_error='superseded: source URL changed' WHERE source=? AND series_id=? AND resolved_at=''", (now, now, source, series_id))
+                    # 保留旧运行历史，但给新网址建立零统计的当前状态，避免卡片误报旧网址进度。
+                    db.execute("INSERT INTO scan_runs(series_id,status,started_at,finished_at,message) VALUES(?,?,?,?,?)", (series_id, "idle", now, now, "source URL changed"))
                 return int(series_id)
-            return db.execute("INSERT INTO source_series(source,name,url,enabled,profile_dir) VALUES(?,?,?,?,?)", (source,name,url,int(enabled),profile_dir or "")).lastrowid
-
+            try:
+                return db.execute("INSERT INTO source_series(source,name,url,enabled,profile_dir) VALUES(?,?,?,?,?)", (source,name,url,int(enabled),profile_dir or "")).lastrowid
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("该来源网址已经存在") from exc
     def delete_source_series(self, series_id, source):
         with self.connect() as db:
             return db.execute("DELETE FROM source_series WHERE id=? AND source=?", (series_id, source)).rowcount > 0

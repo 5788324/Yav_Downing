@@ -28,6 +28,17 @@ class Fake:
 
 
 class JavdbTests(unittest.TestCase):
+    def test_movie_and_magnets_share_one_cached_page_request(self):
+        calls = []
+        class Response:
+            text = '<html><head><title>ABC-001 | JavDB</title></head><body><a href="magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA">1 GB</a></body></html>'
+            def raise_for_status(self): pass
+        class Session:
+            def get(self, url, **_kwargs): calls.append(url); return Response()
+        source = JavdbSource(session=Session(), delay=0)
+        source.fetch_movie('https://x/v/1')
+        source.fetch_magnets('https://x/v/1')
+        self.assertEqual(calls, ['https://x/v/1'])
     def test_sizes(self):
         self.assertEqual(size_bytes('1.5 GB'), 1610612736)
         self.assertIsNone(size_bytes('unknown'))

@@ -19,7 +19,7 @@ class V1MigrationTests(unittest.TestCase):
             db.execute("INSERT INTO works VALUES(1,'ABC-001','', '', '', 'Studio', '', 'Series', '2024-01-01', '', '', '', 1, 'JavDB', 'https://example.test/v/1')")
             db.execute("INSERT INTO actors VALUES(1,'女优甲')")
             db.execute('INSERT INTO work_actors VALUES(1,1)')
-            db.execute("INSERT INTO magnets VALUES(1,'magnet:?xt=urn:btih:ABC123','JavDB',1.5)")
+            db.execute("INSERT INTO magnets VALUES(1,'magnet:?xt=urn:btih:EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE','JavDB',1.5)")
             db.commit()
         finally:
             db.close()

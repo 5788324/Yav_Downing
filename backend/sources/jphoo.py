@@ -12,7 +12,7 @@ from urllib.parse import quote, urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from .javdb import SourceMovie, size_bytes
+from .javdb import SourceMovie, size_bytes, normalize_release_date
 
 _NOISE = {"mp4", "mkv", "avi", "mov", "hevc", "x264", "x265", "h264", "h265", "web", "xxx", "gb", "mb", "kb", "480p", "720p", "1080p", "2160p", "磁力下载链接"}
 
@@ -104,7 +104,7 @@ def parse_movie_html(html: str, url: str) -> SourceMovie:
     date = re.search(r"(?:發行日期|发行日期|日期)\s*[:：]?\s*(\d{4}[./-]\d{1,2}[./-]\d{1,2})", text)
     duration = re.search(r"(?:長度|长度|時長|时长)\s*[:：]?\s*(\d+)", text)
     actresses = [node.get_text(" ", strip=True) for node in soup.select('a[href*="actor"],a[href*="actress"]') if node.get_text(strip=True)]
-    return SourceMovie(title=title, source_url=url, cover_url=cover_url, studio=first('a[href*="studio"],a[href*="maker"],a[href*="publisher"]'), series=first('a[href*="series"],a[href*="tag"]'), release_date=date.group(1).replace("/", "-").replace(".", "-") if date else "", duration_minutes=int(duration.group(1)) if duration else None, actresses=list(dict.fromkeys(actresses)))
+    return SourceMovie(title=title, source_url=url, cover_url=cover_url, studio=first('a[href*="studio"],a[href*="maker"],a[href*="publisher"]'), series=first('a[href*="series"],a[href*="tag"]'), release_date=normalize_release_date(date.group(1)) if date else "", duration_minutes=int(duration.group(1)) if duration else None, actresses=list(dict.fromkeys(actresses)))
 
 
 def authentication_state(current_url: str, password_visible: int, domain_cookie_count: int, local_storage_keys: int, session_storage_keys: int, protected_auth_marker: bool = False) -> tuple[str, list[str]]:

@@ -13,6 +13,17 @@ from backend.scanner import ScanManager
 from backend.sources.jphoo import api_candidates, classify_magnet_candidate
 
 
+class BtihNormalizationTests(unittest.TestCase):
+    def test_hex_and_base32_normalize_to_one_infohash_and_invalid_is_rejected(self):
+        from backend.db import extract_btih
+        import base64
+        hex_hash = "0123456789ABCDEF0123456789ABCDEF01234567"
+        base32_hash = base64.b32encode(bytes.fromhex(hex_hash)).decode("ascii")
+        self.assertEqual(extract_btih(f"magnet:?xt=urn:btih:{hex_hash.lower()}"), hex_hash)
+        self.assertEqual(extract_btih(f"magnet:?xt=urn:btih:{base32_hash}"), hex_hash)
+        for value in ("123", "INVALIDHASH", "A" * 39, "A" * 33):
+            with self.assertRaises(ValueError):
+                extract_btih(f"magnet:?xt=urn:btih:{value}")
 class HardeningDataTests(unittest.TestCase):
     def test_metadata_and_magnet_result_rules(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -25,12 +36,26 @@ class HardeningDataTests(unittest.TestCase):
             db.add_or_update_movie("ABP-001", studio="Other Studio", actresses=["A", "D"], source="javdb", source_url="https://x/j")
             self.assertEqual(db.get_movie(movie)["studio"], "Manual Studio")
             self.assertEqual(db.get_movie(movie)["actresses"], ["C"])
-            one = db.add_magnet(movie, "magnet:?xt=urn:btih:ABC", "javdb", "https://x/j", None)
-            two = db.add_magnet(movie, "magnet:?xt=urn:btih:ABC", "jphoo", "https://x/p", 200)
-            three = db.add_magnet(movie, "magnet:?xt=urn:btih:ABC", "jphoo", "https://x/p", None)
+            one = db.add_magnet(movie, "magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "javdb", "https://x/j", None)
+            two = db.add_magnet(movie, "magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "jphoo", "https://x/p", 200)
+            three = db.add_magnet(movie, "magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "jphoo", "https://x/p", None)
             self.assertEqual((one.created, one.source_added, one.size_updated), (True, True, False))
             self.assertEqual((two.created, two.source_added, two.size_updated), (False, True, True))
             self.assertEqual((three.created, three.source_added, three.size_updated), (False, False, False))
+
+    def test_single_source_title_can_be_corrected_without_overriding_manual_or_multisource_movies(self):
+        with tempfile.TemporaryDirectory() as folder:
+            db = LibraryDatabase(Path(folder) / "library.db")
+            single = db.add_or_update_movie("Wrong Title", source="javdb", source_url="https://x/one")
+            db.add_or_update_movie("Correct Title", source="javdb", source_url="https://x/one")
+            self.assertEqual(db.get_movie(single)["title"], "Correct Title")
+            db.update_movie(single, {"title": "Manual Title"})
+            db.add_or_update_movie("Later Title", source="javdb", source_url="https://x/one")
+            self.assertEqual(db.get_movie(single)["title"], "Manual Title")
+            multiple = db.add_or_update_movie("Old Shared", source="javdb", source_url="https://x/two")
+            db.add_or_update_movie("Old Shared", source="jphoo", source_url="https://x/three")
+            db.add_or_update_movie("New Shared", source="javdb", source_url="https://x/two")
+            self.assertEqual(db.get_movie(multiple)["title"], "Old Shared")
 
     def test_jphoo_candidate_uses_explicit_title_only(self):
         rows = api_candidates({"rows": [{"infoHash": "A" * 40, "name": "ABP-123 Clear Name", "length": "2 GB", "status": "ready"}, {"infoHash": "B" * 40, "length": "3 GB", "id": "999"}]})
@@ -89,6 +114,13 @@ class ApiTests(unittest.TestCase):
     def test_source_edit_delete_and_favorite_validation(self):
         status, javdb = self.request("POST", "/api/sources/javdb", {"name":"J","url":"https://x/j","enabled":True,"scan_status":"bad"})
         self.assertEqual(status, 201)
+        self.assertEqual(self.request("POST", "/api/sources/javdb", {"name":"J-copy","url":"https://x/j","enabled":True})[0], 409)
+        other = self.request("POST", "/api/sources/javdb", {"name":"Other","url":"https://x/other","enabled":True})[1]
+        Handler.scans.series_id = javdb["id"]
+        self.assertEqual(self.request("POST", f'/api/sources/javdb/{other["id"]}/stop', {})[0], 409)
+        Handler.scans.is_running_series = lambda series_id: int(series_id) == javdb["id"]
+        self.assertEqual(self.request("POST", "/api/sources/javdb", {"series_id":javdb["id"],"name":"Blocked","url":"https://x/blocked","enabled":False})[0], 409)
+        Handler.scans.is_running_series = lambda _series_id: False
         status, _ = self.request("POST", "/api/sources/javdb", {"series_id":javdb["id"],"name":"J2","url":"https://x/j2","enabled":False,"new_magnets":99})
         self.assertEqual(status, 201)
         self.assertEqual(self.db.get_source_series(javdb["id"], "javdb")["name"], "J2")
@@ -101,6 +133,14 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.request("POST", f"/api/movies/{self.movie}/favorite", {"favorite":False})[0], 200)
         for value in ("false", 0, None):
             self.assertEqual(self.request("POST", f"/api/movies/{self.movie}/favorite", {"favorite":value})[0], 400)
+
+    def test_index_uses_versioned_app_script_url(self):
+        with urlopen(self.base + "/", timeout=3) as response:
+            self.assertIn(b"/assets/app.js?v=", response.read())
+
+    def test_frontend_assets_are_not_cached_after_local_restart(self):
+        with urlopen(self.base + "/assets/app.js", timeout=3) as response:
+            self.assertEqual(response.headers.get("Cache-Control"), "no-store")
 
     def test_edit_validation_and_active_delete_and_status(self):
         status, config = self.request("POST", "/api/sources/javdb", {"name":"J","url":"https://x/j","enabled":True})
@@ -118,7 +158,14 @@ class ApiTests(unittest.TestCase):
 class FrontendStaticTests(unittest.TestCase):
     def test_source_panel_safety_contracts(self):
         app = (Path(__file__).parents[1] / "backend" / "static" / "app.js").read_text(encoding="utf-8")
-        self.assertIn("document.activeElement?.closest('.source-form')", app)
+        self.assertIn("sourceRefreshInFlight", app)
+        self.assertIn("sourceStatusFailures", app)
+        self.assertIn("连续失败，显示的进度可能已过期", app)
+        self.assertIn("Promise.allSettled", app)
+        self.assertIn("ensureSourcePolling", app)
+        self.assertIn("从第 1 页重新扫描", app)
+        self.assertIn("将从第一页重新扫描该系列", app)
+        self.assertIn("request(`/api/sources/${source}/${id}/${action}`", app)
         self.assertIn("window.confirm", app)
         self.assertIn("if (!$(\x27#sourceOverlay\x27).hidden) closeSources()", app)
         self.assertIn("aria-current", app)
@@ -126,11 +173,44 @@ class FrontendStaticTests(unittest.TestCase):
 
 
     def test_scan_refresh_contract(self):
-        app = (Path(__file__).parents[1] / "backend" / "static" / "app.js").read_text(encoding="utf-8")
-        self.assertIn("let sourceScanActive = false", app)
-        self.assertIn("scanning ||= scan.status === 'running' || scan.status === 'stopping'", app)
+        root = Path(__file__).parents[1]
+        app = (root / "backend" / "static" / "app.js").read_text(encoding="utf-8")
+        html = (root / "backend" / "static" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("const sourceScanStates = { javdb: false, jphoo: false };", app)
+        self.assertIn("reconcileScanStates(sourceScanStates, scans)", app)
+        self.assertIn("transition.stoppedSources.length", app)
         self.assertIn("Promise.all([loadFilters(), loadMovies()])", app)
-        self.assertIn("if (justStopped) await renderSources()", app)
+        self.assertIn('type="module" src="/assets/app.js"', html)
 
 if __name__ == "__main__":
     unittest.main()
+
+class BtihSchemaMigrationTests(unittest.TestCase):
+    def test_schema_three_merges_equivalent_btih_and_preserves_sources(self):
+        import base64
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "library.db"
+            db = LibraryDatabase(path)
+            movie = db.add_or_update_movie("BTIH-001", source="javdb", source_url="https://x/j")
+            db.add_or_update_movie("BTIH-001", source="jphoo", source_url="https://x/p")
+            hex_btih = "0123456789ABCDEF0123456789ABCDEF01234567"
+            base32_btih = base64.b32encode(bytes.fromhex(hex_btih)).decode("ascii")
+            with db.connect() as c:
+                c.execute("UPDATE schema_meta SET value='3' WHERE key='schema_version'")
+                left = c.execute("INSERT INTO magnets(movie_id,magnet,btih,size_bytes,discovered_at) VALUES(?,?,?,?,?)", (movie, "magnet:?xt=urn:btih:" + hex_btih, hex_btih.lower(), 10, "2020-01-02" )).lastrowid
+                right = c.execute("INSERT INTO magnets(movie_id,magnet,btih,size_bytes,discovered_at) VALUES(?,?,?,?,?)", (movie, "magnet:?xt=urn:btih:" + base32_btih, base32_btih.lower(), 20, "2020-01-01" )).lastrowid
+                entries = c.execute("SELECT id FROM source_entries ORDER BY id").fetchall()
+                c.execute("INSERT INTO magnet_sources VALUES(?,?)", (left, entries[0][0]))
+                c.execute("INSERT INTO magnet_sources VALUES(?,?)", (right, entries[1][0]))
+                c.execute("INSERT INTO magnets(movie_id,magnet,btih,size_bytes,discovered_at) VALUES(?,?,?,?,?)", (movie, "broken", "not-a-btih", None, "2020-01-03"))
+            reopened = LibraryDatabase(path)
+            with reopened.connect() as c:
+                rows = c.execute("SELECT btih,size_bytes,discovered_at FROM magnets WHERE movie_id=? ORDER BY id", (movie,)).fetchall()
+                self.assertEqual(rows[0][0], hex_btih)
+                self.assertEqual((rows[0][1], rows[0][2]), (20, "2020-01-01"))
+                self.assertEqual(c.execute("SELECT COUNT(*) FROM magnet_sources WHERE magnet_id=(SELECT id FROM magnets WHERE btih=?)", (hex_btih,)).fetchone()[0], 2)
+                self.assertEqual(c.execute("SELECT COUNT(*) FROM magnets WHERE btih='not-a-btih'").fetchone()[0], 1)
+                self.assertEqual(c.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+            LibraryDatabase(path)
+            with reopened.connect() as c:
+                self.assertEqual(c.execute("SELECT COUNT(*) FROM magnets WHERE movie_id=?", (movie,)).fetchone()[0], 2)
