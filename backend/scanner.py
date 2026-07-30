@@ -265,6 +265,10 @@ class JphooSessionManager:
         self._post("scan", series_id=series_id, from_start=from_start)
         return self.status()
     def stop(self, series_id=None):
+        snapshot = self._snapshot()
+        active = bool(self.scanner or snapshot.get("scanning") or snapshot.get("status") in {"starting", "running", "stopping"})
+        if not active:
+            return self.status()
         if series_id is not None and self.series_id is not None and int(series_id) != self.series_id:
             raise ValueError("请求的系列不是当前正在扫描的系列")
         self.scan_stop_requested.set()

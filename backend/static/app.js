@@ -449,7 +449,7 @@ let sourceRefreshInFlight = false;
 let sourceStatusFailures = 0;
 const sourceScanStates = { javdb: false, jphoo: false };
 let sourceOpBusy = false;
-let sourceLastTrigger = null;
+let sourceLastTrigger = null;`nlet sourcePageEnding = false;
 
 function sourcePayload(form, source) {
   return {
@@ -493,7 +493,8 @@ async function renderSources() {
   const panels = await Promise.allSettled([sourcePanel('javdb', 'JavDB'), sourcePanel('jphoo', 'JPHOO')]);
   content.innerHTML = panels.map((item, index) => item.status === 'fulfilled' ? item.value : sourcePanelError(index ? 'JPHOO' : 'JavDB', item.reason)).join('');
 }
-function ensureSourcePolling() { if (!sourcePollTimer) sourcePollTimer = setInterval(refreshSourceStatuses, 3000); }
+function stopSourcePolling(force = false) { if (sourcePollTimer && (force || !Object.values(sourceScanStates).some(Boolean))) { clearInterval(sourcePollTimer); sourcePollTimer = null; } }
+function ensureSourcePolling() { if (!sourcePageEnding && !sourcePollTimer) sourcePollTimer = setInterval(refreshSourceStatuses, 3000); }
 function openSources() { sourceLastTrigger = document.activeElement; $('#openSources').setAttribute('aria-current','page'); $('#sourceOverlay').hidden = false; document.body.style.overflow = 'hidden'; renderSources().then(() => $('#closeSources').focus()); ensureSourcePolling(); }
 function closeSources() { $('#sourceOverlay').hidden = true; $('#openSources').removeAttribute('aria-current'); document.body.style.overflow = ''; sourceLastTrigger?.focus(); }
 async function refreshSourceStatuses() {
@@ -505,12 +506,12 @@ async function refreshSourceStatuses() {
     const login = !$('#sourceOverlay').hidden ? await request('/api/sources/jphoo/login') : null;
     sourceStatusFailures = 0;
     const transition = reconcileScanStates(sourceScanStates, scans); Object.assign(sourceScanStates, transition.next);
-    const loginPolling = login && (new Set(['opening','checking','closing','window_open']).has(login.status) || new Set(['opening','checking','closing','window_open']).has(login.login));
+    const loginPolling = login && (new Set(['opening','checking','closing']).has(login.status) || new Set(['opening','checking','closing']).has(login.login));
     if (transition.refreshLibrary) await Promise.all([loadFilters(), loadMovies({ silent: true })]);
 const shownLogin = $('[data-login-state]')?.textContent?.trim() || '';
     const loginChanged = Boolean(login && shownLogin !== loginDisplayState(login));
     if ((transition.stoppedSources.length || loginPolling || loginChanged) && !$('#sourceOverlay').hidden) await renderSources();
-    if (!Object.values(transition.next).some(Boolean) && !loginPolling) { clearInterval(sourcePollTimer); sourcePollTimer = null; }
+    if (!Object.values(transition.next).some(Boolean) && !loginPolling) stopSourcePolling();
   } catch (_) {
     sourceStatusFailures += 1;
     if (sourceStatusFailures === 3) showToast("来源状态读取连续失败，显示的进度可能已过期。");
@@ -575,6 +576,8 @@ $('#shutdownApp')?.addEventListener('click', async () => {
   const button = $('#shutdownApp');
   if (button.disabled) return;
   button.disabled = true; button.textContent = '正在安全退出…';
+  sourcePageEnding = true; stopSourcePolling(true);
+  const refreshDeadline = Date.now() + 1500; while (sourceRefreshInFlight && Date.now() < refreshDeadline) await new Promise(resolve => setTimeout(resolve, 25));
   try {
     const boot = window.__YAV_BOOTSTRAP__ || {};
     const response = await fetch('/api/app/shutdown', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({token: boot.shutdownToken, instance_id: boot.instanceId})});
