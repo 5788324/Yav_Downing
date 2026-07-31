@@ -77,6 +77,7 @@ jobs:
           }
 
           $pageData = Join-Path $env:RUNNER_TEMP 'yav-rc2-page'
+          $env:PYTHONPATH = (Get-Location).Path
           python qa/ui_seed.py $pageData
           $pageProcess = Start-Process -FilePath $exe -ArgumentList @('--data-dir', $pageData, '--port', '18772', '--no-browser') -PassThru -WindowStyle Hidden
           try {
