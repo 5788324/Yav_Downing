@@ -1,0 +1,114 @@
+name: Build Yav 2.0.2 RC2 artifact
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-rc2:
+    name: Build fixed-source RC2 on Windows
+    runs-on: windows-latest
+    env:
+      SOURCE_SHA: da815c1776486267571667fc9be7888b6a4faa51
+      RC_VERSION: 2.0.2
+      RC_NAME: Yav-2.0.2-RC2-da815c1-windows-x64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: da815c1776486267571667fc9be7888b6a4faa51
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install build and UI dependencies
+        run: |
+          python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml playwright pyinstaller
+          npm install --no-save @playwright/test@1.54.1 @axe-core/playwright@4.10.2
+          npx playwright install chromium
+      - name: Verify fixed source and run Python Node checks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git rev-parse HEAD) -ne $env:SOURCE_SHA) { throw 'Checkout SHA drifted' }
+          if ((python -c "from backend.runtime import APP_VERSION; print(APP_VERSION)") -ne $env:RC_VERSION) { throw 'Unexpected app version' }
+          python -m compileall backend tests yav_v2.py qa
+          python -m unittest discover -s tests -v
+          node --check backend/static/app.js
+          node --check backend/static/accessibility.js
+          node --test tests/test_scan_state.mjs
+          git diff --check
+      - name: Build fixed-source RC2 executable
+        run: python -m PyInstaller --noconfirm --clean yav_v2.spec
+      - name: Verify page safe exit, CLI exit, and port release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path 'dist\Yav-V2.exe').Path
+          $pageData = Join-Path $env:RUNNER_TEMP 'yav-rc2-page'
+          python qa/ui_seed.py $pageData
+          $pageProcess = Start-Process -FilePath $exe -ArgumentList @('--data-dir', $pageData, '--port', '18772', '--no-browser') -PassThru -WindowStyle Hidden
+          try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(45)
+            do {
+              try { $status = Invoke-RestMethod 'http://127.0.0.1:18772/api/app/status' -TimeoutSec 2 } catch { $status = $null }
+              if ($status.app -eq 'Yav') { break }
+              Start-Sleep -Milliseconds 250
+            } while ([DateTime]::UtcNow -lt $deadline)
+            if ($status.app -ne 'Yav') { throw 'RC2 page-exit instance did not become ready' }
+            $env:BASE_URL = 'http://127.0.0.1:18772'
+            npx playwright test qa/ui_full_chain.spec.js --workers=1 --reporter=line
+            if (-not $pageProcess.WaitForExit(30000)) { throw 'Page safety exit did not stop RC2 EXE' }
+            if (Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object LocalPort -eq 18772) { throw 'Page safety exit did not release port 18772' }
+          } finally {
+            if (-not $pageProcess.HasExited) { $pageProcess.Kill($true) }
+          }
+          $cliData = Join-Path $env:RUNNER_TEMP 'yav-rc2-cli'
+          $cliProcess = Start-Process -FilePath $exe -ArgumentList @('--data-dir', $cliData, '--port', '18773', '--no-browser') -PassThru -WindowStyle Hidden
+          try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(45)
+            do {
+              try { $status = Invoke-RestMethod 'http://127.0.0.1:18773/api/app/status' -TimeoutSec 2 } catch { $status = $null }
+              if ($status.app -eq 'Yav') { break }
+              Start-Sleep -Milliseconds 250
+            } while ([DateTime]::UtcNow -lt $deadline)
+            if ($status.app -ne 'Yav') { throw 'RC2 CLI-exit instance did not become ready' }
+            & $exe --data-dir $cliData --shutdown
+            if (-not $cliProcess.WaitForExit(30000)) { throw 'CLI safety exit did not stop RC2 EXE' }
+            if (Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object LocalPort -eq 18773) { throw 'CLI safety exit did not release port 18773' }
+          } finally {
+            if (-not $cliProcess.HasExited) { $cliProcess.Kill($true) }
+          }
+      - name: Create RC2 artifact, SHA256SUMS, and manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'yav-rc2-artifact'
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          $name = "$env:RC_NAME.exe"
+          $exe = Join-Path $root $name
+          Copy-Item 'dist\Yav-V2.exe' $exe
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToUpperInvariant()
+          $size = (Get-Item $exe).Length
+          "$hash  $name" | Set-Content (Join-Path $root 'SHA256SUMS.txt') -Encoding ascii
+          $manifest = [ordered]@{ product='Yav'; version=$env:RC_VERSION; channel='RC2'; source_commit=$env:SOURCE_SHA; source_ref='v2-rebuild merge commit'; platform='windows-x64'; file=$name; size_bytes=$size; sha256=$hash; old_rc_status='FAIL - 918574E5FF886DDBCAA41B542C0EE1B40EA12D1C56AA6B136003880AD9B42BAF must not be released' } | ConvertTo-Json
+          $manifest | Set-Content (Join-Path $root 'RC2-MANIFEST.json') -Encoding utf8
+          $zip = Join-Path $root "$env:RC_NAME.zip"
+          Compress-Archive -LiteralPath @($exe, (Join-Path $root 'SHA256SUMS.txt'), (Join-Path $root 'RC2-MANIFEST.json')) -DestinationPath $zip -Force
+          $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToUpperInvariant()
+          "$zipHash  $(Split-Path $zip -Leaf)" | Add-Content (Join-Path $root 'SHA256SUMS.txt') -Encoding ascii
+          Get-Item $exe, $zip | Select-Object Name, Length
+          Get-Content (Join-Path $root 'SHA256SUMS.txt')
+      - name: Upload RC2 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yav-2.0.2-RC2-da815c1-windows-x64
+          path: |
+            ${{ runner.temp }}/yav-rc2-artifact/Yav-2.0.2-RC2-da815c1-windows-x64.zip
+            ${{ runner.temp }}/yav-rc2-artifact/SHA256SUMS.txt
+            ${{ runner.temp }}/yav-rc2-artifact/RC2-MANIFEST.json
+          if-no-files-found: error
+          retention-days: 14
