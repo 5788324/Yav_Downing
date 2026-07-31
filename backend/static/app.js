@@ -578,8 +578,20 @@ window.addEventListener('pagehide', () => {
   stopSourcePolling(true);
 });
 
-$('#shutdownApp')?.addEventListener('click', async () => {
-  if (!confirm('退出会停止正在进行的扫描并关闭 Yav。是否继续？')) return;
+function closeShutdownConfirm() {
+  $('#shutdownOverlay').hidden = true;
+  $('#shutdownApp')?.focus();
+}
+
+$('#shutdownApp')?.addEventListener('click', () => {
+  $('#shutdownOverlay').hidden = false;
+  $('#confirmShutdown')?.focus();
+});
+
+$('#cancelShutdown')?.addEventListener('click', closeShutdownConfirm);
+
+$('#confirmShutdown')?.addEventListener('click', async () => {
+  $('#shutdownOverlay').hidden = true;
   const button = $('#shutdownApp');
   if (button.disabled) return;
   button.disabled = true; button.textContent = '正在安全退出…';

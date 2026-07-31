@@ -516,16 +516,20 @@ test('Yav V2 全链路 UI、交互、响应式和无障碍验收', async ({ brow
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.reload({ waitUntil: 'networkidle' });
   await waitForCards(page, 36);
-  page.once('dialog', dialog => dialog.dismiss());
   await page.locator('#shutdownApp').click();
-  await expect(page.locator('#shutdownApp')).toHaveText('安全退出 Yav');
-  mark('安全退出', '确认框取消');
-  page.once('dialog', dialog => dialog.accept());
+  await expect(page.locator('#shutdownOverlay')).toBeVisible();
+  await expect(page.locator('#confirmShutdown')).toBeFocused();
+  await page.locator('#cancelShutdown').click();
+  await expect(page.locator('#shutdownOverlay')).toBeHidden();
+  await expect(page.locator('#shutdownApp')).toBeFocused();
+  mark('安全退出', '确认框打开、取消与焦点恢复');
+  await page.locator('#shutdownApp').click();
+  await expect(page.locator('#shutdownOverlay')).toBeVisible();
   shuttingDown = true;
-  await page.locator('#shutdownApp').click();
+  await page.locator('#confirmShutdown').click();
   await expect(page.locator('body')).toContainText(/Yav 已安全退出|Yav 仍在安全退出中/, { timeout: 30000 });
   await shot(page, 'safe-shutdown');
-  mark('安全退出', '确认、HTTP 202、退出完成页');
+  mark('安全退出', '再次确认、HTTP 202、退出完成页');
 
   expect(runtimeErrors, '运行期间出现控制台、页面或同源网络错误').toEqual([]);
   expect(coverage.filter(item => item.result !== 'passed')).toEqual([]);
