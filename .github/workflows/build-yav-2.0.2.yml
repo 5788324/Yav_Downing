@@ -124,8 +124,15 @@ jobs:
             } while ([DateTime]::UtcNow -lt $deadline)
             if ($status.app -ne 'Yav') { throw 'Packaged Yav did not become ready' }
             if ($status.version -ne '2.0.2') { throw "Unexpected API version: $($status.version)" }
-            & $exe --data-dir $data --shutdown
-            if ($LASTEXITCODE -ne 0) { throw 'CLI shutdown failed' }
+            $instance = Join-Path $data 'runtime\instance.json'
+            $secret = Join-Path $data 'runtime\shutdown.secret'
+            $runtimeDeadline = [DateTime]::UtcNow.AddSeconds(15)
+            while ((-not (Test-Path $instance)) -or (-not (Test-Path $secret))) {
+              if ([DateTime]::UtcNow -ge $runtimeDeadline) { throw 'Runtime credentials were not created' }
+              Start-Sleep -Milliseconds 100
+            }
+            $shutdown = Start-Process -FilePath $exe -ArgumentList @('--data-dir', $data, '--shutdown') -PassThru -Wait -WindowStyle Hidden
+            if ($shutdown.ExitCode -ne 0) { throw "CLI shutdown failed with exit code $($shutdown.ExitCode)" }
             if (-not $server.WaitForExit(30000)) { throw 'Packaged Yav did not exit after shutdown' }
             $client = [Net.Sockets.TcpClient]::new()
             try { $client.Connect('127.0.0.1', $port); throw 'Port remained open after shutdown' }
