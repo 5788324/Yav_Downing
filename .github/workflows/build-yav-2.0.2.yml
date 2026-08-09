@@ -1,0 +1,163 @@
+name: Build Yav 2.0.2 candidate
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHA: 42a163be034161e31bc6daf7bd6a191dda7054ee
+
+jobs:
+  python-and-static:
+    name: Python ${{ matrix.python }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+      - name: Verify fixed source
+        shell: pwsh
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          Write-Output $actual
+          if ($actual -ne $env:SOURCE_SHA) { throw "Expected $env:SOURCE_SHA, got $actual" }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml playwright pyinstaller
+      - name: Run Python checks
+        run: |
+          python -m compileall backend tests yav_v2.py qa
+          python -m unittest discover -s tests -v
+      - name: Run JavaScript checks
+        run: |
+          node --check backend/static/app.js
+          node --check backend/static/accessibility.js
+          node --test tests/test_scan_state.mjs
+      - name: Check whitespace
+        run: git diff --check
+
+  playwright-ui:
+    name: Playwright UI full chain
+    needs: python-and-static
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+      - name: Verify fixed source
+        shell: pwsh
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          Write-Output $actual
+          if ($actual -ne $env:SOURCE_SHA) { throw "Expected $env:SOURCE_SHA, got $actual" }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml playwright
+          npm install --no-save @playwright/test@1.54.1 @axe-core/playwright@4.10.2
+          npx playwright install --with-deps chromium
+      - name: Create fixture and start local service
+        run: |
+          PYTHONPATH=. python qa/ui_seed.py "$RUNNER_TEMP/yav-ui-data"
+          python -m backend.app --data-dir "$RUNNER_TEMP/yav-ui-data" --port 18765 > "$RUNNER_TEMP/yav-ui-server.log" 2>&1 &
+          for attempt in $(seq 1 80); do curl --fail --silent http://127.0.0.1:18765/api/app/status > /dev/null && exit 0; sleep 0.25; done
+          cat "$RUNNER_TEMP/yav-ui-server.log"
+          exit 1
+      - name: Run UI full chain including safe exit confirmation
+        env:
+          BASE_URL: http://127.0.0.1:18765
+        run: npx playwright test qa/ui_full_chain.spec.js --workers=1 --reporter=line
+
+  windows-package:
+    name: Windows PyInstaller build and shutdown smoke
+    needs: python-and-static
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+      - name: Verify fixed source
+        shell: pwsh
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          Write-Output $actual
+          if ($actual -ne $env:SOURCE_SHA) { throw "Expected $env:SOURCE_SHA, got $actual" }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install build dependencies
+        run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml playwright pyinstaller
+      - name: Build executable
+        run: python -m PyInstaller --noconfirm --clean yav_v2.spec
+      - name: Verify package API version, CLI exit and port release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path 'dist\Yav-V2.exe').Path
+          $data = Join-Path $env:RUNNER_TEMP 'yav-2.0.2-package-smoke'
+          $port = 18765
+          $server = Start-Process -FilePath $exe -ArgumentList @('--data-dir', $data, '--port', $port, '--no-browser') -PassThru -WindowStyle Hidden
+          try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(45)
+            do {
+              try { $status = Invoke-RestMethod "http://127.0.0.1:$port/api/app/status" -TimeoutSec 2 } catch { $status = $null }
+              if ($status.app -eq 'Yav') { break }
+              Start-Sleep -Milliseconds 250
+            } while ([DateTime]::UtcNow -lt $deadline)
+            if ($status.app -ne 'Yav') { throw 'Packaged Yav did not become ready' }
+            if ($status.version -ne '2.0.2') { throw "Unexpected API version: $($status.version)" }
+            & $exe --data-dir $data --shutdown
+            if ($LASTEXITCODE -ne 0) { throw 'CLI shutdown failed' }
+            if (-not $server.WaitForExit(30000)) { throw 'Packaged Yav did not exit after shutdown' }
+            $client = [Net.Sockets.TcpClient]::new()
+            try { $client.Connect('127.0.0.1', $port); throw 'Port remained open after shutdown' }
+            catch [Net.Sockets.SocketException] { Write-Output 'PORT_RELEASED=true' }
+            finally { $client.Dispose() }
+          } finally {
+            if (-not $server.HasExited) { $server.Kill($true) }
+          }
+      - name: Create formal build files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Move-Item 'dist\Yav-V2.exe' 'dist\Yav-V2-2.0.2.exe'
+          $hash = (Get-FileHash 'dist\Yav-V2-2.0.2.exe' -Algorithm SHA256).Hash.ToUpperInvariant()
+          "$hash  Yav-V2-2.0.2.exe" | Set-Content 'dist\SHA256SUMS.txt' -Encoding ascii
+          @(
+            'Yav 2.0.2 formal build manifest'
+            "source_sha=$env:SOURCE_SHA"
+            "verified_sha=$((git rev-parse HEAD).Trim())"
+            "exe=Yav-V2-2.0.2.exe"
+            "exe_size=$((Get-Item 'dist\Yav-V2-2.0.2.exe').Length)"
+            "exe_sha256=$hash"
+            "api_version=2.0.2"
+          ) | Set-Content 'dist\BUILD-MANIFEST.txt' -Encoding utf8
+          Get-Content 'dist\SHA256SUMS.txt'
+          Get-Content 'dist\BUILD-MANIFEST.txt'
+      - name: Upload formal build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yav-2.0.2-42a163b-windows-x64
+          path: |
+            dist/Yav-V2-2.0.2.exe
+            dist/SHA256SUMS.txt
+            dist/BUILD-MANIFEST.txt
+          if-no-files-found: error
