@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.0.2"
 
 
 def default_data_dir() -> Path:
@@ -163,12 +163,14 @@ def _try_lock_file(handle) -> bool:
     """非阻塞取得进程生命周期文件锁；成功后必须保持 handle 打开。"""
     if os.name == "nt":
         import msvcrt
-        handle.seek(0, os.SEEK_END)
-        if handle.tell() == 0:
-            handle.write(b"0")
-            handle.flush()
-        handle.seek(0)
         try:
+            # 两个进程同时首次创建锁文件时，Windows 也可能在 write/flush 阶段
+            # 返回 PermissionError；它和 LK_NBLCK 失败一样表示锁已被其他实例占用。
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"0")
+                handle.flush()
+            handle.seek(0)
             msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
             return True
         except OSError:

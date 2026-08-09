@@ -4,6 +4,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import Mock, patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
@@ -13,6 +14,24 @@ import yav_v2
 from backend.app import ApplicationRuntime, Handler
 from backend.db import LibraryDatabase
 from backend.runtime import APP_VERSION, clear_runtime_state, port_is_open, read_runtime_state, write_runtime_state
+
+
+class NoBrowserInstanceCollisionTests(unittest.TestCase):
+    def test_duplicate_no_browser_start_returns_without_native_message_box(self):
+        with tempfile.TemporaryDirectory() as folder:
+            lock = Mock()
+            lock.acquire.return_value = False
+            logger = Mock()
+            with patch.object(yav_v2, "configure_logging", return_value=logger), \
+                 patch.object(yav_v2, "choose_port", return_value=18768), \
+                 patch.object(yav_v2, "InstanceLock", return_value=lock), \
+                 patch.object(yav_v2, "_wait_for_existing_instance", return_value=(18768, True)), \
+                 patch.object(yav_v2, "_message") as message_box, \
+                 patch.object(yav_v2.webbrowser, "open") as open_browser:
+                self.assertEqual(yav_v2.run(["--data-dir", folder, "--port", "18768", "--no-browser"]), 0)
+            message_box.assert_not_called()
+            open_browser.assert_not_called()
+            logger.info.assert_called()
 
 
 class _Component:
