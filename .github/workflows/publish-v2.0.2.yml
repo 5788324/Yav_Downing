@@ -1,0 +1,193 @@
+name: Publish Yav 2.0.2
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.event.pull_request.head.ref == 'release/2.0.2-publish'
+    runs-on: windows-latest
+    env:
+      SOURCE_SHA: 42a163be034161e31bc6daf7bd6a191dda7054ee
+      BUILD_RUN_ID: '31297953032'
+      ARTIFACT_NAME: Yav-2.0.2-42a163b-windows-x64
+      RELEASE_TAG: v2.0.2
+      EXE_NAME: Yav-V2-2.0.2.exe
+      EXE_SIZE: '55505239'
+      EXE_SHA256: 06D23E9139795BD4B25EDD6389EF1BBDFFE25920709AF6FDB63B3CE18871B5D1
+    steps:
+      - name: Checkout fixed formal source
+        uses: actions/checkout@v4
+        with:
+          ref: 42a163be034161e31bc6daf7bd6a191dda7054ee
+          fetch-depth: 0
+
+      - name: Verify source and main have not drifted
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = git rev-parse HEAD
+          if ($actual -ne $env:SOURCE_SHA) { throw "Fixed checkout drifted: $actual" }
+          $remoteMainLine = git ls-remote origin refs/heads/main
+          $remoteMain = ($remoteMainLine -split "`t")[0]
+          if ($remoteMain -ne $env:SOURCE_SHA) { throw "main moved after approval: $remoteMain" }
+          Write-Host "FORMAL_SOURCE_SHA=$actual"
+
+      - name: Download approved formal build artifact
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          gh run download $env:BUILD_RUN_ID -R $env:GITHUB_REPOSITORY -n $env:ARTIFACT_NAME -D artifact
+          Get-ChildItem artifact | Select-Object Name, Length
+
+      - name: Verify formal assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path 'artifact' $env:EXE_NAME
+          $sums = Join-Path 'artifact' 'SHA256SUMS.txt'
+          $manifest = Join-Path 'artifact' 'BUILD-MANIFEST.txt'
+          foreach ($path in @($exe, $sums, $manifest)) {
+            if (-not (Test-Path $path)) { throw "Missing formal asset: $path" }
+          }
+          $size = (Get-Item $exe).Length
+          if ($size -ne [int64]$env:EXE_SIZE) { throw "EXE size mismatch: $size" }
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToUpperInvariant()
+          if ($hash -ne $env:EXE_SHA256) { throw "EXE SHA mismatch: $hash" }
+          $sumText = Get-Content $sums -Raw
+          if ($sumText -notmatch [regex]::Escape("$($env:EXE_SHA256)  $($env:EXE_NAME)")) { throw 'SHA256SUMS does not match approved EXE' }
+          $manifestText = Get-Content $manifest -Raw
+          foreach ($required in @(
+            "source_sha=$($env:SOURCE_SHA)",
+            "verified_sha=$($env:SOURCE_SHA)",
+            "exe=$($env:EXE_NAME)",
+            "exe_size=$($env:EXE_SIZE)",
+            "exe_sha256=$($env:EXE_SHA256)",
+            'api_version=2.0.2'
+          )) {
+            if ($manifestText -notmatch [regex]::Escape($required)) { throw "Manifest missing: $required" }
+          }
+          Write-Host "FORMAL_EXE_SHA256=$hash"
+
+      - name: Final packaged EXE smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path (Join-Path 'artifact' $env:EXE_NAME)).Path
+          $data = Join-Path $env:RUNNER_TEMP 'yav-release-final-smoke'
+          $port = 18774
+          $process = Start-Process -FilePath $exe -ArgumentList @('--data-dir', $data, '--port', "$port", '--no-browser') -PassThru -WindowStyle Hidden
+          try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(45)
+            $status = $null
+            do {
+              try { $status = Invoke-RestMethod "http://127.0.0.1:$port/api/app/status" -TimeoutSec 2 } catch { $status = $null }
+              if ($status.app -eq 'Yav' -and $status.version -eq '2.0.2') { break }
+              Start-Sleep -Milliseconds 250
+            } while ([DateTime]::UtcNow -lt $deadline)
+            if ($status.app -ne 'Yav' -or $status.version -ne '2.0.2') { throw 'Formal EXE did not report Yav 2.0.2' }
+            & $exe --data-dir $data --shutdown
+            if (-not $process.WaitForExit(30000)) { throw 'Formal EXE did not exit after CLI shutdown' }
+            $listener = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -eq $port }
+            if ($listener) { throw "Formal smoke port $port is still listening" }
+          } finally {
+            if (-not $process.HasExited) { $process.Kill($true) }
+          }
+
+      - name: Ensure v2.0.2 does not already exist
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tagLine = git ls-remote origin "refs/tags/$($env:RELEASE_TAG)"
+          if ($tagLine) { throw "Tag $($env:RELEASE_TAG) already exists; refusing to overwrite" }
+          gh release view $env:RELEASE_TAG -R $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) { throw "Release $($env:RELEASE_TAG) already exists; refusing to overwrite" }
+          $global:LASTEXITCODE = 0
+
+      - name: Prepare release notes
+        shell: pwsh
+        run: |
+          @'
+          # Yav 2.0.2
+
+          Yav 2.0.2 是 2.x 重构线的稳定性与数据一致性发布，重点收口资料库刷新、扫描恢复、BTIH 规范化、来源管理、JPHOO 会话状态、安全退出与 Windows 单实例行为。
+
+          ## 主要改进
+
+          - 扫描后资料库与来源状态自动刷新，并加强分页与请求竞态处理。
+          - JavDB 支持停止/恢复、失败 URL 持久化优先重试及全量扫描断点重置。
+          - BTIH 严格校验并统一为 40 位十六进制；schema 3→4 可合并 Base32/hex 等价哈希并保留 `magnet_sources`。
+          - 手工编辑字段只保护实际修改过的字段，降低后续扫描覆盖风险。
+          - JPHOO 登录、窗口与扫描状态采用更严格的 ready 门禁，并加强停止/关闭并发处理。
+          - 来源 CRUD、后台轮询生命周期、Windows `instance.lock` 竞争与 `--no-browser` 重复启动得到加固。
+          - 页面“安全退出 Yav”使用页面内确认框，支持取消、再次确认并正常释放端口、runtime 与进程。
+
+          ## 发布验证
+
+          - RC2 Windows 实机隔离验收：**PASS WITH NOTES**。
+          - 正式源码：`42a163be034161e31bc6daf7bd6a191dda7054ee`。
+          - 正式 EXE SHA-256：`06D23E9139795BD4B25EDD6389EF1BBDFFE25920709AF6FDB63B3CE18871B5D1`。
+          - SQLite `integrity_check = ok`，schema 4 重启幂等，BTIH 审计无非法/规范重复。
+          - UI、备份、页面安全退出、CLI 退出、单实例竞争及资源释放均通过验收。
+
+          ## 已知非阻塞说明
+
+          - Windows EXE 当前未签署 Authenticode，系统可能显示“未知发布者”或 SmartScreen 提示。
+          - 本轮最终实机副本在验收前已经是 schema 4；schema 3→4 迁移此前已在隔离的 2.0.1 数据副本上完成验证。
+          - 浏览器可能出现 `favicon.ico` 404，不影响应用功能。
+          - 发布验收未使用真实 JPHOO Profile/账号，也未执行大型 JavDB/JPHOO 扫描。
+
+          ## 校验
+
+          Windows PowerShell：
+
+          ```powershell
+          Get-FileHash .\Yav-V2-2.0.2.exe -Algorithm SHA256
+          ```
+
+          预期：
+
+          `06D23E9139795BD4B25EDD6389EF1BBDFFE25920709AF6FDB63B3CE18871B5D1`
+          '@ | Set-Content release-notes.md -Encoding utf8
+
+      - name: Create v2.0.2 tag and GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          gh release create $env:RELEASE_TAG -R $env:GITHUB_REPOSITORY `
+            --target $env:SOURCE_SHA `
+            --title 'Yav 2.0.2' `
+            --notes-file release-notes.md `
+            "artifact/$($env:EXE_NAME)" `
+            'artifact/SHA256SUMS.txt' `
+            'artifact/BUILD-MANIFEST.txt'
+
+      - name: Verify published release and redownload EXE
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $release = gh release view $env:RELEASE_TAG -R $env:GITHUB_REPOSITORY --json tagName,targetCommitish,isDraft,isPrerelease,url,assets | ConvertFrom-Json
+          if ($release.tagName -ne $env:RELEASE_TAG) { throw 'Release tag mismatch' }
+          if ($release.isDraft -or $release.isPrerelease) { throw 'Release unexpectedly draft/prerelease' }
+          $assetNames = @($release.assets | ForEach-Object { $_.name })
+          foreach ($name in @($env:EXE_NAME, 'SHA256SUMS.txt', 'BUILD-MANIFEST.txt')) {
+            if ($name -notin $assetNames) { throw "Published asset missing: $name" }
+          }
+          New-Item -ItemType Directory -Path verify-release -Force | Out-Null
+          gh release download $env:RELEASE_TAG -R $env:GITHUB_REPOSITORY --pattern $env:EXE_NAME --dir verify-release
+          $publishedHash = (Get-FileHash (Join-Path 'verify-release' $env:EXE_NAME) -Algorithm SHA256).Hash.ToUpperInvariant()
+          if ($publishedHash -ne $env:EXE_SHA256) { throw "Published EXE SHA mismatch: $publishedHash" }
+          Write-Host "RELEASE_URL=$($release.url)"
+          Write-Host "PUBLISHED_EXE_SHA256=$publishedHash"
