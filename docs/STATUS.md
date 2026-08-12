@@ -114,3 +114,9 @@ RC 文件：
 - 已配置并全量重扫 JavDB Vixen 系列 `https://javdb.com/series/K6eO`。
 - 已入库 634 部影片；封面、演员、日期、厂商和时长覆盖均为 634，磁链来源关联 6,647 条，数据库完整性检查为 `ok`。
 - 修复 JavDB 当前 `img.video-cover` 直连封面解析；普通 HTTP 无法读取的 3 个版权地区限制页面未写入猜测资料，保留既有失败记录以便后续重试。
+
+## 2026-08-13：七个 JavDB 系列全量更新
+
+- 对用户提供的 8 个链接去重后，新增并全量扫描 Tushy、Blackedraw、Blacked、Wifey、Deeper、Milfy、Tushyraw 共 7 个系列。
+- 合计入库 3,131 个来源页，封面、演员、日期、厂商和时长均完整；新增磁链来源关联 28,894 条。
+- 扫描后全库共 5,282 部影片、47,373 条磁链；来源 URL 和影片内 BTIH 均无重复，`PRAGMA integrity_check = ok`。
