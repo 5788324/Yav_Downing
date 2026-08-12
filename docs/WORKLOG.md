@@ -274,3 +274,8 @@
 - 在 `C:\tmp\yav-20202-rc-copy-20260730` 的备份副本执行 schema 3→4、二次幂等、只读 BTIH/演员审计、候选 EXE API 启动、备份与 CLI 退出。数据库统计无删除，`PRAGMA integrity_check` 为 ok；没有操作唯一正式数据。
 - 本地检查：`compileall`、68 项 Python、两份 JS 语法检查、Node scan-state 与 `git diff --check` 通过。
 - 2026-07-30：CI run `30526114460` 最终全绿。修复 Windows `instance.lock` 首次竞争时 write/flush 抛出的 `PermissionError`，竞争者正常返回未获取锁，不再遗留子进程或占用锁文件；单实例跨进程回归通过。Draft PR #6 未合并、未发布。
+## 2026-08-12：JavDB 直接封面图片兼容
+
+- Vixen 全系列真实扫描发现 JavDB 当前详情页使用 `img.video-cover`，旧选择器仅识别封面容器内的图片，导致来源资料与聚合影片封面为空。
+- 补充直接封面图片选择器与精准回归测试；幂等重扫后，634 部已入库 Vixen 影片的封面、演员、日期、厂商和时长覆盖均为 634，保留 6,647 条磁链来源关联。
+- 另有 3 个详情 URL 的普通 HTTP 请求收到 JavDB 地区版权限制提示页，无法取得影片名；未写入猜测资料，继续保留在失败队列供后续重试。

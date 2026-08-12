@@ -59,7 +59,7 @@ class JavdbSource:
     def fetch_movie(self,url):
         soup=self._movie_soup(url); text=' '.join(soup.stripped_strings)
         title=(soup.select_one('meta[property="og:title"]') or soup.title); title=(title.get('content') if title and title.has_attr('content') else title.get_text(' ',strip=True) if title else '').split('|')[0].strip()
-        cover=soup.select_one('meta[property="og:image"],.video-cover img,.cover img'); cover=urljoin(url,(cover.get('content') or cover.get('src',''))) if cover else ''
+        cover=soup.select_one('meta[property="og:image"],img.video-cover,.video-cover img,.cover img'); cover=urljoin(url,(cover.get('content') or cover.get('src',''))) if cover else ''
         date=re.search(r'(?:發行日期|发行日期|日期)\s*[:：]?\s*(\d{4}[./-]\d{1,2}[./-]\d{1,2})',text)
         duration=re.search(r'(?:長度|长度|時長|时长)\s*[:：]?\s*(\d+)',text)
         actresses=[a.get_text(' ',strip=True) for a in soup.select('a[href^="/actor/"],a[href^="/actors/"],a[href^="/performer/"],a[href^="/performers/"]') if a.get_text(strip=True) and not is_invalid_metadata(a.get_text(' ',strip=True))]

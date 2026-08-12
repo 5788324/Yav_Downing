@@ -108,3 +108,9 @@ RC 文件：
 - `docs/HANDOFF_2026-07-30.md`
 - 交接包中的 `prompts/NEW_CHAT_PROMPT.md`
 - 交接包中的 `prompts/RC_ACCEPTANCE_CODEX_PROMPT.md`
+
+## 2026-08-12：Vixen 系列补采
+
+- 已配置并全量重扫 JavDB Vixen 系列 `https://javdb.com/series/K6eO`。
+- 已入库 634 部影片；封面、演员、日期、厂商和时长覆盖均为 634，磁链来源关联 6,647 条，数据库完整性检查为 `ok`。
+- 修复 JavDB 当前 `img.video-cover` 直连封面解析；普通 HTTP 无法读取的 3 个版权地区限制页面未写入猜测资料，保留既有失败记录以便后续重试。

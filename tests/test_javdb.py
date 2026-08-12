@@ -43,6 +43,16 @@ class JavdbTests(unittest.TestCase):
         self.assertEqual(size_bytes('1.5 GB'), 1610612736)
         self.assertIsNone(size_bytes('unknown'))
 
+    def test_direct_video_cover_image_is_parsed(self):
+        class Session:
+            def get(self, _url, **_kwargs):
+                class Response:
+                    text = '<html><head><title>VIXEN-001 Example | JavDB</title></head><body><img class="video-cover" src="https://c0.jdbstatic.com/covers/vi/vixen.jpg"></body></html>'
+                    def raise_for_status(self): pass
+                return Response()
+        movie = JavdbSource(session=Session(), delay=0).fetch_movie('https://javdb.com/v/example')
+        self.assertEqual(movie.cover_url, 'https://c0.jdbstatic.com/covers/vi/vixen.jpg')
+
     def test_listing_detail_and_resume_page(self):
         source = JavdbSource(Fake(), delay=0)
         page, urls = next(source.scan_series('https://x/series'))
