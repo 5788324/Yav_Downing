@@ -25,6 +25,17 @@ def size_bytes(value: str) -> int|None:
     if not hit:return None
     return round(float(hit.group(1))*{'GB':1024**3,'MB':1024**2,'KB':1024}[hit.group(2).upper()])
 
+def panel_value(soup: BeautifulSoup, *labels: str) -> str:
+    """只读取影片信息面板中的字段，避免命中顶部导航的同名链接。"""
+    wanted = {label.rstrip(':：').strip() for label in labels}
+    for block in soup.select('.panel-block'):
+        heading = block.select_one('strong')
+        if not heading or heading.get_text(' ', strip=True).rstrip(':：').strip() not in wanted:
+            continue
+        value = block.select_one('.value')
+        return value.get_text(' ', strip=True) if value else ''
+    return ''
+
 class JavdbSource:
     name='javdb'; headers={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36'}
     def __init__(self, session=None, delay=0.6): self.session=session or requests.Session(); self.delay=delay; self._page_cache={}
@@ -63,8 +74,9 @@ class JavdbSource:
         date=re.search(r'(?:發行日期|发行日期|日期)\s*[:：]?\s*(\d{4}[./-]\d{1,2}[./-]\d{1,2})',text)
         duration=re.search(r'(?:長度|长度|時長|时长)\s*[:：]?\s*(\d+)',text)
         actresses=[a.get_text(' ',strip=True) for a in soup.select('a[href^="/actor/"],a[href^="/actors/"],a[href^="/performer/"],a[href^="/performers/"]') if a.get_text(strip=True) and not is_invalid_metadata(a.get_text(' ',strip=True))]
-        studios=[a.get_text(' ',strip=True) for a in soup.select('a[href*="maker"],a[href*="studio"],a[href*="publisher"]') if a.get_text(strip=True)]
-        return SourceMovie(title=title, source_url=url, cover_url=cover, studio=studios[0] if studios else '', release_date=normalize_release_date(date.group(1)) if date else '', duration_minutes=int(duration.group(1)) if duration else None, actresses=list(dict.fromkeys(actresses)))
+        studio=panel_value(soup, '片商', '厂商', '廠商', 'Maker')
+        parsed_series=panel_value(soup, '系列', 'Series')
+        return SourceMovie(title=title, source_url=url, cover_url=cover, studio=studio, series=parsed_series, release_date=normalize_release_date(date.group(1)) if date else '', duration_minutes=int(duration.group(1)) if duration else None, actresses=list(dict.fromkeys(actresses)))
     def fetch_magnets(self,url):
         soup=self._movie_soup(url); out=[]
         for a in soup.select('a[href^="magnet:"]'):

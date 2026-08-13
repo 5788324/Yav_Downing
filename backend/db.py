@@ -32,7 +32,7 @@ def normalize_title(value: str) -> str:
     return re.sub(r"\s*(?:\||[-–—])\s*(?:javdb|jphoo)\s*$", "", text).strip()
 
 
-INVALID_METADATA_VALUES = frozenset({"首页", "上一页", "下一页", "登录", "注册", "查看更多", "影片信息", "演员列表", "磁力下载", "返回顶部", "查看全部作品", "推荐", "推薦", "有碼", "有码", "歐美", "欧美", "演員", "演员", "無碼", "无码"})
+INVALID_METADATA_VALUES = frozenset({"首页", "上一页", "下一页", "登录", "注册", "查看更多", "影片信息", "演员列表", "磁力下载", "返回顶部", "查看全部作品", "推荐", "推薦", "有碼", "有码", "歐美", "欧美", "演員", "演员", "無碼", "无码", "片商", "厂商", "廠商"})
 
 def is_invalid_metadata(value: str) -> bool:
     clean = re.sub(r"\s+", " ", value or "").strip()
@@ -185,6 +185,8 @@ CREATE INDEX IF NOT EXISTS idx_scan_failures_unresolved ON scan_failures(source,
             db.execute("UPDATE scan_runs SET status='interrupted', finished_at=? WHERE status IN ('starting','running','stopping')", (self.now(),))
             invalid = tuple(sorted(INVALID_METADATA_VALUES))
             placeholders = ",".join("?" for _ in invalid)
+            db.execute(f"UPDATE source_entries SET studio='' WHERE studio IN ({placeholders})", invalid)
+            db.execute(f"UPDATE movies SET studio='',updated_at=? WHERE studio IN ({placeholders}) AND manual_fields NOT LIKE '%\"studio\"%'", (self.now(), *invalid))
             db.execute(f"DELETE FROM movie_actresses WHERE actress_id IN (SELECT id FROM actresses WHERE name IN ({placeholders})) AND movie_id IN (SELECT id FROM movies WHERE manual_fields NOT LIKE '%\"actresses\"%')", invalid)
             db.execute("DELETE FROM actresses WHERE NOT EXISTS (SELECT 1 FROM movie_actresses WHERE movie_actresses.actress_id=actresses.id)")
 
@@ -607,12 +609,14 @@ CREATE INDEX IF NOT EXISTS idx_scan_failures_unresolved ON scan_failures(source,
                 for row in db.execute(
                     "SELECT DISTINCT studio FROM movies WHERE studio<>'' ORDER BY studio"
                 )
+                if not is_invalid_metadata(row[0])
             ]
             series = [
                 row[0]
                 for row in db.execute(
                     "SELECT DISTINCT series FROM movies WHERE series<>'' ORDER BY series"
                 )
+                if not is_invalid_metadata(row[0])
             ]
             actresses = [
                 row[0]

@@ -72,7 +72,7 @@ function movieCard(movie) {
         <div class="card-copy">
           <h4 class="card-title">${escapeHtml(movie.title)}</h4>
           <div class="card-meta">${meta.length ? meta.map(item => `<span>${escapeHtml(item)}</span>`).join('') : '<span>资料待补全</span>'}</div>
-          <div class="card-actresses">${movie.actresses?.length ? escapeHtml(movie.actresses.join(' · ')) : '未知女演员'}</div>
+          <div class="card-actresses">${movie.actresses?.length ? escapeHtml(movie.actresses.join(' · ')) : '未知演员'}</div>
         </div>
       </button>
     </article>`;
@@ -114,7 +114,7 @@ async function loadFilters() {
 
   state.filters.studio = fillSelect('#studioFilter', state.filterData.studios, '全部厂商', '未知厂商');
   state.filters.series = fillSelect('#seriesFilter', state.filterData.series, '全部系列', '未分类系列');
-  state.filters.actress = fillSelect('#actressFilter', state.filterData.actresses, '全部女演员', '未知女演员');
+  state.filters.actress = fillDatalist('#actressFilter', '#actressOptions', state.filterData.actresses);
   state.filters.source = fillSelect('#sourceFilter', state.filterData.sources, '全部磁链来源');
 }
 
@@ -127,6 +127,13 @@ function fillSelect(selector, values, allLabel, unknownLabel = '') {
   return select.value;
 }
 
+function fillDatalist(inputSelector, listSelector, values) {
+  const input = $(inputSelector);
+  const current = input.value;
+  $(listSelector).innerHTML = `<option value="未知演员"></option>${values.map(v => `<option value="${escapeHtml(v)}"></option>`).join('')}`;
+  input.value = current;
+  return current === '未知演员' ? state.filterData.unknown_value : current;
+}
 function showSkeletons() {
   $('#emptyState').hidden = true;
   $('#movieGrid').innerHTML = Array.from({ length: Math.min(12, state.pageSize) }, () => '<div class="loading-card"></div>').join('');
@@ -175,7 +182,7 @@ function currentTitle() {
   const selected = [
     $('#studioFilter').selectedOptions[0]?.textContent,
     $('#seriesFilter').selectedOptions[0]?.textContent,
-    $('#actressFilter').selectedOptions[0]?.textContent,
+    $('#actressFilter').value.trim(),
   ].filter(text => text && !text.startsWith('全部'));
   return selected.length ? selected.join(' · ') : '全部影片';
 }
@@ -233,7 +240,7 @@ function renderDetail(movie) {
     ['系列', movie.series || '未分类系列'],
     ['日期', displayDate(movie.release_date) || '未知日期'],
     ['时长', movie.duration_minutes !== null && movie.duration_minutes !== undefined ? `${movie.duration_minutes} 分钟` : '未知时长'],
-    ['女演员', movie.actresses?.join('、') || '未知女演员'],
+    ['演员', movie.actresses?.join('、') || '未知演员'],
     ['来源页面', `${movie.sources?.length || 0} 个`],
   ];
   $('#detailContent').innerHTML = `
@@ -285,8 +292,8 @@ function editForm(movie) {
     <label>系列<input name="series" value="${escapeHtml(movie.series || '')}"></label>
     <label>日期<input name="release_date" type="date" value="${escapeHtml(movie.release_date || '')}"></label>
     <label>时长（分钟）<input name="duration_minutes" type="number" min="0" max="1440" value="${movie.duration_minutes ?? ''}"></label>
-    <label class="wide">女演员<input name="actresses" value="${escapeHtml((movie.actresses || []).join('、'))}" placeholder="多人请用顿号或逗号分隔"></label>
-    <div class="save-row"><button type="submit">保存手动修改</button></div>
+    <label class="wide">演员<input name="actresses" value="${escapeHtml((movie.actresses || []).join('、'))}" placeholder="多人请用顿号或逗号分隔"></label>
+    <div class="save-row"><button type="button" class="cancel-edit" id="cancelEditMovie">取消</button><button type="submit">保存手动修改</button></div>
   </form>`;
 }
 
@@ -340,10 +347,13 @@ function bindEvents() {
     }
   }, true);
 
+  let searchTimer;
+  $('#searchInput').addEventListener('input', event => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { state.filters.q = event.target.value.trim(); state.page = 1; loadMovies(); }, 280);
+  });
   $('#searchInput').addEventListener('keydown', event => {
-    if (event.key === 'Enter') {
-      state.filters.q = event.target.value.trim(); state.page = 1; loadMovies();
-    }
+    if (event.key === 'Enter') { clearTimeout(searchTimer); state.filters.q = event.target.value.trim(); state.page = 1; loadMovies(); }
   });
   $('#searchInput').addEventListener('search', event => {
     state.filters.q = event.target.value.trim(); state.page = 1; loadMovies();
@@ -355,8 +365,12 @@ function bindEvents() {
   };
   Object.entries(filterBindings).forEach(([id, key]) => {
     $(`#${id}`).addEventListener('change', event => {
-      state.filters[key] = event.target.value; state.page = 1; loadMovies();
+      state.filters[key] = id === 'actressFilter' && event.target.value === '未知演员' ? state.filterData.unknown_value : event.target.value.trim(); state.page = 1; loadMovies();
     });
+  });
+
+  $('#actressFilter').addEventListener('keydown', event => {
+    if (event.key === 'Enter') { state.filters.actress = event.target.value === '未知演员' ? state.filterData.unknown_value : event.target.value.trim(); state.page = 1; loadMovies(); }
   });
 
   $('#pageSize').addEventListener('change', event => {
@@ -419,6 +433,7 @@ document.addEventListener('keydown', event => { if (event.key !== 'Escape') retu
       if (!$('#editForm').hidden) $('#editForm input').focus();
       return;
     }
+    if (event.target.closest('#cancelEditMovie')) { $('#editForm').hidden = true; $('#editMovie').focus(); return; }
     const favorite = event.target.closest('#detailFavorite');
     if (favorite && state.currentMovie) {
       const movieId = state.currentMovie.id;
@@ -478,7 +493,7 @@ function sourceCard(item, session = {}, appProfile = '') {
 }
 function loginDisplayState(login = {}) { const status=String(login.status || ''); const stable=String(login.login || ''); return ['opening','checking','closing'].includes(status) ? status : (status || stable || 'unknown'); }
 function sourceForm(source, label) {
-  return `<form class="source-form" data-source-form="${source}"><h3 data-form-title>添加 ${label} 系列</h3><input name="name" placeholder="系列名称" required><input name="url" type="url" placeholder="${label} 系列网址" required><label class="source-check"><input name="enabled" type="checkbox" checked> 启用此系列</label><div><button type="submit">保存系列</button><button type="button" data-cancel-edit hidden>取消编辑</button></div></form>`;
+  return `<form class="source-form" data-source-form="${source}"><h3 data-form-title>添加 ${label} 系列</h3><label><span>系列名称</span><input name="name" placeholder="例如：Vixen" required></label><label><span>系列网址</span><input name="url" type="url" placeholder="${label} 系列网址" required></label><label class="source-check"><input name="enabled" type="checkbox" checked> 启用此系列</label><div class="source-form-actions"><button type="submit">保存系列</button><button type="button" data-cancel-edit hidden>取消编辑</button></div></form>`;
 }
 async function sourcePanel(source, label) {
   const [rows, scan, login] = await Promise.all([request(`/api/sources/${source}`), request(`/api/sources/${source}/scan`), source === 'jphoo' ? request('/api/sources/jphoo/login') : Promise.resolve({})]);

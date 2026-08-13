@@ -227,7 +227,7 @@ test('Yav V2 全链路 UI、交互、响应式和无障碍验收', async ({ brow
     mark('快速筛选', label);
   }
 
-  for (const [buttonName, selectId] of [['厂商', '#studioFilter'], ['系列', '#seriesFilter'], ['女演员', '#actressFilter']]) {
+  for (const [buttonName, selectId] of [['厂商', '#studioFilter'], ['系列', '#seriesFilter'], ['演员', '#actressFilter']]) {
     await page.getByRole('button', { name: new RegExp(buttonName) }).click();
     await expect(page.locator(selectId)).toBeFocused();
     mark('分类入口', `${buttonName}定位筛选框`);
@@ -246,13 +246,14 @@ test('Yav V2 全链路 UI、交互、响应式和无障碍验收', async ({ brow
   const filterCases = [
     ['#studioFilter', { label: '青岚制作' }, '厂商'],
     ['#seriesFilter', { label: '城市夜航' }, '系列'],
-    ['#actressFilter', { label: '林一' }, '女演员'],
+    ['#actressFilter', '林一', '演员'],
     ['#sourceFilter', { label: 'JavDB' }, '磁链来源'],
     ['#magnetFilter', 'true', '有磁链'],
   ];
   for (const [selector, option, label] of filterCases) {
     await page.locator('#clearFilters').click();
-    await page.locator(selector).selectOption(option);
+    if (selector === '#actressFilter') { await page.locator(selector).fill(option); await page.locator(selector).press('Enter'); }
+    else await page.locator(selector).selectOption(option);
     await expect(page.locator('#resultSummary')).not.toContainText('83 部影片');
     mark('组合筛选', label);
   }
@@ -341,6 +342,11 @@ test('Yav V2 全链路 UI、交互、响应式和无障碍验收', async ({ brow
   await page.locator('#editMovie').click();
   await expect(page.locator('#editForm')).toBeVisible();
   await shot(page, 'movie-edit-form');
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(page.locator('#editForm')).toBeHidden();
+  await expect(page.locator('#editMovie')).toBeFocused();
+  mark('影片编辑', '取消编辑不保存并恢复焦点');
+  await page.locator('#editMovie').click();
   const edit = page.locator('#editForm');
   await edit.locator('[name="title"]').fill('');
   await edit.getByRole('button', { name: '保存手动修改' }).click();
