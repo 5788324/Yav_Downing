@@ -99,12 +99,26 @@ def parse_movie_html(html: str, url: str) -> SourceMovie:
     cover = soup.select_one('meta[property="og:image"], .video-cover img, .cover img, main img[src]')
     cover_url = urljoin(url, (cover.get("content") or cover.get("src", ""))) if cover else ""
     text = " ".join(soup.stripped_strings)
-    def first(selector):
-        node = soup.select_one(selector); return node.get_text(" ", strip=True) if node else ""
+    def labeled_value(*labels):
+        for node in soup.select(".q-item__label"):
+            value = node.get_text(" ", strip=True)
+            for label in labels:
+                if re.match(rf"^{re.escape(label)}\s*[:：]", value):
+                    link = node.select_one("a")
+                    return link.get_text(" ", strip=True) if link else re.sub(rf"^{re.escape(label)}\s*[:：]\s*", "", value)
+        return ""
     date = re.search(r"(?:發行日期|发行日期|日期)\s*[:：]?\s*(\d{4}[./-]\d{1,2}[./-]\d{1,2})", text)
     duration = re.search(r"(?:長度|长度|時長|时长)\s*[:：]?\s*(\d+)", text)
-    actresses = [node.get_text(" ", strip=True) for node in soup.select('a[href*="actor"],a[href*="actress"]') if node.get_text(strip=True)]
-    return SourceMovie(title=title, source_url=url, cover_url=cover_url, studio=first('a[href*="studio"],a[href*="maker"],a[href*="publisher"]'), series=first('a[href*="series"],a[href*="tag"]'), release_date=normalize_release_date(date.group(1)) if date else "", duration_minutes=int(duration.group(1)) if duration else None, actresses=list(dict.fromkeys(actresses)))
+    actresses = [node.get_text(" ", strip=True) for node in soup.select('a[href^="/actor/"],a[href^="/actress/"],a[href^="/performer/"]') if node.get_text(strip=True)]
+    if not actresses:
+        raw = labeled_value("演员", "演員")
+        actresses = [name.strip() for name in re.split(r"[、,，/]", raw) if name.strip()]
+    duration_minutes = int(duration.group(1)) if duration and int(duration.group(1)) > 0 else None
+    legacy_studio = "" if soup.select_one(".q-item__label") else (soup.select_one('a[href*="studio"],a[href*="maker"],a[href*="publisher"]') or "")
+    legacy_series = "" if soup.select_one(".q-item__label") else (soup.select_one('a[href*="series"],a[href*="tag"]') or "")
+    legacy_studio = legacy_studio.get_text(" ", strip=True) if legacy_studio else ""
+    legacy_series = legacy_series.get_text(" ", strip=True) if legacy_series else ""
+    return SourceMovie(title=title, source_url=url, cover_url=cover_url, studio=labeled_value("厂商", "廠商", "片商", "Studio") or legacy_studio, series=labeled_value("系列", "Series") or legacy_series, release_date=normalize_release_date(date.group(1)) if date else "", duration_minutes=duration_minutes, actresses=list(dict.fromkeys(actresses)))
 
 
 def authentication_state(current_url: str, password_visible: int, domain_cookie_count: int, local_storage_keys: int, session_storage_keys: int, protected_auth_marker: bool = False) -> tuple[str, list[str]]:

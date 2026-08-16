@@ -28,6 +28,14 @@ class JphooParserTests(unittest.TestCase):
         self.assertEqual(movie.actresses, ["Alice", "Beth"])
         self.assertEqual(movie.cover_url, "https://www.jphoo.net/covers/abp.jpg")
 
+    def test_qitem_metadata_ignores_navigation_and_zero_duration_is_unknown(self):
+        html = """<html><head><title>XYZ-001 Test - JPHOO</title></head><body><nav><a href="/tag/all">tag 番号分类</a><a href="/publisher/all">厂商大全</a></nav><div class="q-item__label">时长：0分钟</div><div class="q-item__label">系列：<a href="/series/x">Series One</a></div><div class="q-item__label">演员：<a href="/performer/a">Alice</a><span>、</span><a href="/performer/b">Bob</a></div></body></html>"""
+        movie = parse_movie_html(html, "https://www.jphoo.net/works/xyz")
+        self.assertIsNone(movie.duration_minutes)
+        self.assertEqual(movie.series, "Series One")
+        self.assertEqual(movie.studio, "")
+        self.assertEqual(movie.actresses, ["Alice", "Bob"])
+
     def test_api_candidates_keep_all_btih_and_best_size(self):
         payload = {"rows": [{"name": "ABP-123 1.5 GB", "magnet": "magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}, {"name": "ABP-123 2 GB", "magnet": "magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}, {"name": "XYZ-999 700 MB", "magnet": "magnet:?xt=urn:btih:BBB"}]}
         rows = api_candidates(payload)
