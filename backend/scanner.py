@@ -46,19 +46,20 @@ class BaseScanner:
 
 class JavdbScanner(BaseScanner):
     source_name = "javdb"
+    source_factory = None
     def _process_url(self, source, series, series_id, url, page, stats):
         stats["discovered"] += 1
         data = source.fetch_movie(url)
-        existed = self.db.movie_import_exists(data.title, "javdb", url)
-        movie = self.db.add_or_update_movie(data.title, studio=data.studio, series=data.series or series["name"], release_date=data.release_date, duration_minutes=data.duration_minutes, cover_url=data.cover_url, actresses=data.actresses, source="javdb", source_url=url)
+        existed = self.db.movie_import_exists(data.title, self.source_name, url)
+        movie = self.db.add_or_update_movie(data.title, studio=data.studio, series=data.series or (series["name"] if '/makers/' not in series["url"] else ''), release_date=data.release_date, duration_minutes=data.duration_minutes, cover_url=data.cover_url, actresses=data.actresses, source=self.source_name, source_url=url)
         stats["new_movies"] += int(not existed)
         for item in source.fetch_magnets(url):
-            saved = self.db.add_magnet(movie, item.magnet, "javdb", url, item.size_bytes)
+            saved = self.db.add_magnet(movie, item.magnet, self.source_name, url, item.size_bytes)
             stats["new_magnets"] += int(saved.created)
         stats["processed"] += 1
         self.db.resolve_scan_failure(self.source_name, series_id, url)
     def run(self, series_id, from_start=False):
-        series, page, run_id = self._begin(series_id, from_start); stats = self._stats(); source = JavdbSource(); error = ""
+        series, page, run_id = self._begin(series_id, from_start); stats = self._stats(); source = self.source_factory() if self.source_factory else JavdbSource(); error = ""
         try:
             for failure in self._retry_unresolved(series_id, self._process_url):
                 if self.stop_event.is_set(): break

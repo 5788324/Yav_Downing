@@ -96,6 +96,18 @@ python -m backend.app
 
 ## 数据边界
 
+### AVFan 命令行采集预览
+
+支持 AVFan 中文系列页和厂商页，使用独立 Edge Profile。首次在 Edge 中手动完成验证，再回终端按 Enter。请先对临时数据库试跑，避免与运行中的 Yav 同时操作同一数据库。
+
+```powershell
+python -m backend.scan_avfan --db "C:\tmp\avfan-test\library.db" --profile "C:\tmp\avfan-test\profile" --name "AVFan 系列" --url "https://avfan.com/zh-CN/series/8rBSiU9k" --from-start
+```
+
+同一数据库和网址再次执行时，省略 `--from-start` 可续扫；Ctrl+C 在当前请求结束后停止，未完成页下次重新处理。磁链追加与手动资料保护沿用图书馆规则。
+
+来源管理中也已增加 AVFan：选择来源后打开独立 Edge 会话，确认页面正常后点击“验证页面”，再选择继续扫描。扫描在本地后台线程运行，不依赖 Codex 单次浏览器操作的时限；关闭网页不会停止后端扫描。独立会话与右侧浏览器不共享验证状态，遇到验证页应人工处理后续扫，不保证全程无人值守。目前只完成了部分真实影片入库，尚未通过全系列验收。
+
 不会提交或打包：
 
 - `library.db`

@@ -198,6 +198,12 @@ select { appearance: none; }
 .magnet-heading { display: flex; justify-content: space-between; align-items: end; margin-bottom: 18px; }
 .magnet-heading h3 { margin: 5px 0 0; font: 600 28px Georgia,"Songti SC",serif; }
 .magnet-heading p { color: var(--muted); font-size: 11px; }
+.temporary-lookups { display: flex; justify-content: space-between; align-items: center; gap: 18px; margin: -4px 0 18px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 14px; background: #f1ece2; }
+.temporary-lookups strong, .temporary-lookups small { display: block; }
+.temporary-lookups small { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.temporary-lookup-links { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.temporary-lookup-links a { border-radius: 9px; padding: 8px 10px; background: #fffdf8; color: var(--ink); text-decoration: none; font-size: 12px; font-weight: 800; white-space: nowrap; }
+.temporary-lookup-links a:hover { background: var(--dark); color: white; }
 .magnet-list { display: grid; gap: 10px; }
 .magnet-row { display: grid; grid-template-columns: minmax(130px,.65fr) minmax(120px,.6fr) 1fr auto; align-items: center; gap: 14px; padding: 15px 16px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,253,248,.7); }
 .magnet-sources { display: flex; flex-wrap: wrap; gap: 5px; }
@@ -250,6 +256,8 @@ select { appearance: none; }
   .detail-copy h2 { margin: 8px 0 13px; font-size: 22px; }
   .detail-facts { grid-template-columns: 1fr 1fr; }
   .detail-body { padding: 25px 20px 35px; }
+  .temporary-lookups { align-items: flex-start; flex-direction: column; }
+  .temporary-lookup-links { justify-content: flex-start; }
   .magnet-row { grid-template-columns: 1fr auto; }
   .magnet-hash { grid-column: 1/-1; }
   .edit-form { grid-template-columns: 1fr; }

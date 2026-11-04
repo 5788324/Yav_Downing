@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .db import LibraryDatabase
 from .scanner import ScanManager, JphooSessionManager
+from .avfan_session import AvfanSession
 from .runtime import APP_VERSION, clear_runtime_state, configure_logging, write_runtime_state
 
 
@@ -77,6 +78,7 @@ class ApplicationRuntime:
 
     def graceful_shutdown(self, reason):
         try:
+            self._shutdown_component(getattr(self, 'avfan_session', None), 'AVFan 会话', 35)
             self._shutdown_component(self.scans, "JavDB 扫描", 10)
             self._shutdown_component(self.jphoo_session, "JPHOO 会话", 15)
         finally:
@@ -87,6 +89,7 @@ STATIC_DIR = Path(__file__).with_name("static")
 
 
 class Handler(BaseHTTPRequestHandler):
+    avfan_session = None
     database: LibraryDatabase | None = None
     scans: ScanManager | None = None
     jphoo_scans: JphooSessionManager | None = None
@@ -129,6 +132,12 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
         query = parse_qs(parsed.query)
+        if path.startswith('/api/sources/avfan'):
+            if path == '/api/sources/avfan': self._json(self.database.list_source_series('avfan'))
+            elif path == '/api/sources/avfan/scan': self._json(self.avfan_session.status() if self.avfan_session else {'status':'idle','running':False})
+            elif path == '/api/sources/avfan/login': self._json(self.avfan_session.session_status() if self.avfan_session else {'status':'closed'})
+            else: self.send_error(404)
+            return
 
         if path == "/api/app/status":
             self._json(self.runtime.status() if self.runtime else {"status":"starting"})
@@ -222,13 +231,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         assert self.database is not None
-        match = re.fullmatch(r"/api/sources/(?:javdb|jphoo)/(\d+)", urlparse(self.path).path)
+        match = re.fullmatch(r"/api/sources/(?:javdb|jphoo|avfan)/(\d+)", urlparse(self.path).path)
         if not match:
             self.send_error(404)
             return
         source = urlparse(self.path).path.split("/")[3]
         series_id = int(match.group(1))
-        manager = self.scans if source == "javdb" else self.jphoo_scans
+        manager = self.scans if source == "javdb" else self.avfan_session if source == 'avfan' else self.jphoo_scans
         if (manager and manager.is_running_series(series_id)) or self.database.is_source_series_scanning(series_id, source):
             self._json({"error": "该系列正在扫描，请先停止扫描。"}, 409)
             return
@@ -240,6 +249,25 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         assert self.database is not None
+        path = urlparse(self.path).path
+        if path.startswith('/api/sources/avfan'):
+            try:
+                if not self.avfan_session: raise ValueError('AVFan 会话未初始化')
+                if path == '/api/sources/avfan':
+                    payload = self._source_payload(self._read_json(), 'avfan')
+                    from .sources.avfan import validate_url
+                    validate_url(payload['url'])
+                    if payload.get('series_id') and self.avfan_session.is_running_series(payload['series_id']): raise ValueError('该系列正在扫描')
+                    self._json({'id':self.database.save_source_series(**payload)},201)
+                elif re.fullmatch(r'/api/sources/avfan/login/(open|check|close)',path):
+                    payload = self._read_json()
+                    self._json(self.avfan_session.action(path.split('/')[-1],payload.get('series_id')),202)
+                elif re.fullmatch(r'/api/sources/avfan/\d+/(scan|continue|stop)',path):
+                    sid, action = int(path.split('/')[-2]), path.split('/')[-1]
+                    self._json(self.avfan_session.stop(sid) if action == 'stop' else self.avfan_session.start(sid,action=='scan'),202)
+                else: self.send_error(404)
+            except (ValueError, TypeError) as exc: self._json({'error':str(exc)},409)
+            return
         if urlparse(self.path).path == "/api/app/shutdown":
             if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
                 self._json({"error": "请求必须使用 JSON"}, 415); return
@@ -364,10 +392,12 @@ def main():
     logger = configure_logging(args.data_dir)
     Handler.database = LibraryDatabase(args.data_dir / "library.db")
     Handler.scans = ScanManager(Handler.database)
+    Handler.avfan_session = AvfanSession(Handler.database, args.data_dir / 'browser-profile' / 'avfan')
     jphoo_session = JphooSessionManager(Handler.database, args.data_dir / "browser-profile" / "jphoo")
     Handler.jphoo_scans = Handler.jphoo_login = jphoo_session
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     Handler.runtime = ApplicationRuntime(server, Handler.scans, jphoo_session, secrets.token_urlsafe(32), args.instance_id or None, logger)
+    Handler.runtime.avfan_session = Handler.avfan_session
     write_runtime_state(args.data_dir, pid=os.getpid(), port=args.port, instance_id=Handler.runtime.instance_id, token=Handler.runtime.shutdown_token)
     url = f"http://127.0.0.1:{args.port}"
     print(f"Yav V2 已启动：{url}")
@@ -376,6 +406,7 @@ def main():
     try:
         server.serve_forever()
     finally:
+        Handler.avfan_session.shutdown(timeout=35)
         jphoo_session.shutdown(timeout=15)
         server.server_close()
         clear_runtime_state(args.data_dir)

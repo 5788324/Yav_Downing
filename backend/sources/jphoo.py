@@ -1,6 +1,7 @@
 """JPHOO 来源适配器：独立 Edge 资料目录、HTTP/浏览器分页与安全磁链归属。"""
 from __future__ import annotations
 
+import json
 import re
 import time
 import unicodedata
@@ -14,7 +15,7 @@ from bs4 import BeautifulSoup
 
 from .javdb import SourceMovie, size_bytes, normalize_release_date
 
-_NOISE = {"mp4", "mkv", "avi", "mov", "hevc", "x264", "x265", "h264", "h265", "web", "xxx", "gb", "mb", "kb", "480p", "720p", "1080p", "2160p", "磁力下载链接"}
+_NOISE = {"mp4", "mkv", "avi", "mov", "hevc", "x264", "x265", "h264", "h265", "web", "xxx", "gb", "mb", "kb", "480p", "720p", "1080p", "2160p", "磁力下载链接", "the", "and", "for", "with", "from", "this", "that", "brazzers", "brazzersexxtra"}
 
 
 @dataclass(frozen=True)
@@ -40,14 +41,24 @@ def title_tokens(value: str) -> set[str]:
 
 
 def _video_code(value: str) -> str:
-    hit = re.search(r"\b([a-z]{2,})\s*[-_. ]\s*(\d{2,})\b", normalize_jphoo_title(value), re.I)
+    # 两位年份（如 BrazzersExxtra.26.08.13）不是片号。
+    hit = re.search(r"\b([a-z]{2,})\s*[-_. ]\s*(\d{3,})\b", normalize_jphoo_title(value), re.I)
     return f"{hit.group(1)}-{hit.group(2)}".upper() if hit else ""
 
 
+def _release_marker(value: str) -> str:
+    text = unicodedata.normalize("NFKC", value or "").casefold()
+    hit = re.search(r"(?<!\d)(\d{2,4})\s*[._-]\s*(\d{2})\s*[._-]\s*(\d{2})(?!\d)", text)
+    return "-".join(hit.groups()) if hit else ""
+
+
 def classify_magnet_candidate(current_title: str, candidate_title: str) -> str:
-    """宁可 unknown，也不以短词或数字把同日资源归错。"""
+    """宁可 unknown，也不以日期编号、短词或数字把其他影片归错。"""
     current_clean, candidate_clean = normalize_jphoo_title(current_title), normalize_jphoo_title(candidate_title)
     if not current_clean or not candidate_clean:
+        return "unknown"
+    current_date, candidate_date = _release_marker(current_title), _release_marker(candidate_title)
+    if current_date and candidate_date and current_date != candidate_date:
         return "unknown"
     current_code, candidate_code = _video_code(current_title), _video_code(candidate_title)
     if current_code and candidate_code:
@@ -91,13 +102,31 @@ def series_links_from_html(html: str, base_url: str) -> list[str]:
     return list(dict.fromkeys(urljoin(base_url, node.get("href", "").split("?")[0]) for node in soup.select('a[href^="/works/"]') if node.get("href")))
 
 
-def parse_movie_html(html: str, url: str) -> SourceMovie:
+def _initial_works_data(soup: BeautifulSoup) -> dict:
+    for node in soup.find_all("script"):
+        raw = node.string or node.get_text("", strip=False)
+        prefix = "window.__INITIAL_STATE__="
+        if not raw.strip().startswith(prefix):
+            continue
+        try:
+            serialized = raw.strip()[len(prefix):].split(";document.currentScript", 1)[0].rstrip(";")
+            payload = json.loads(serialized)
+            works = payload.get("works", {}).get("worksData", {})
+            return works if isinstance(works, dict) else {}
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            return {}
+    return {}
+
+
+def parse_movie_html(html: str, url: str, initial_override: dict | None = None) -> SourceMovie:
     soup = BeautifulSoup(html or "", "lxml")
+    initial = initial_override if isinstance(initial_override, dict) else _initial_works_data(soup)
+    initial_data = initial.get("data", {}) if isinstance(initial.get("data"), dict) else {}
     title_node = soup.select_one('meta[property="og:title"]') or soup.title
     title = title_node.get("content", "") if title_node and title_node.has_attr("content") else title_node.get_text(" ", strip=True) if title_node else ""
     title = re.split(r"\s*-\s*(?:JPHOO|磁力下载链接).*$", title, flags=re.I)[0].strip()
     cover = soup.select_one('meta[property="og:image"], .video-cover img, .cover img, main img[src]')
-    cover_url = urljoin(url, (cover.get("content") or cover.get("src", ""))) if cover else ""
+    cover_url = urljoin(url, (cover.get("content") or cover.get("src", ""))) if cover else str(initial_data.get("picBig") or initial_data.get("picSmall") or "")
     text = " ".join(soup.stripped_strings)
     def labeled_value(*labels):
         for node in soup.select(".q-item__label"):
@@ -113,12 +142,18 @@ def parse_movie_html(html: str, url: str) -> SourceMovie:
     if not actresses:
         raw = labeled_value("演员", "演員")
         actresses = [name.strip() for name in re.split(r"[、,，/]", raw) if name.strip()]
-    duration_minutes = int(duration.group(1)) if duration and int(duration.group(1)) > 0 else None
+    initial_performers = [str(item.get("name") or "").strip() for item in initial.get("performer", []) if isinstance(item, dict) and str(item.get("name") or "").strip()]
+    actresses = list(dict.fromkeys(initial_performers or actresses))
+    raw_duration = duration.group(1) if duration else str(initial_data.get("duration") or "")
+    duration_minutes = int(raw_duration) if raw_duration.isdigit() and int(raw_duration) > 0 else None
     legacy_studio = "" if soup.select_one(".q-item__label") else (soup.select_one('a[href*="studio"],a[href*="maker"],a[href*="publisher"]') or "")
     legacy_series = "" if soup.select_one(".q-item__label") else (soup.select_one('a[href*="series"],a[href*="tag"]') or "")
     legacy_studio = legacy_studio.get_text(" ", strip=True) if legacy_studio else ""
     legacy_series = legacy_series.get_text(" ", strip=True) if legacy_series else ""
-    return SourceMovie(title=title, source_url=url, cover_url=cover_url, studio=labeled_value("厂商", "廠商", "片商", "Studio") or legacy_studio, series=labeled_value("系列", "Series") or legacy_series, release_date=normalize_release_date(date.group(1)) if date else "", duration_minutes=duration_minutes, actresses=list(dict.fromkeys(actresses)))
+    initial_maker = next((str(item.get("name") or "").strip() for item in initial.get("maker", []) if isinstance(item, dict) and str(item.get("name") or "").strip()), "")
+    initial_series = next((str(item.get("name") or "").strip() for item in initial.get("series", []) if isinstance(item, dict) and str(item.get("name") or "").strip()), "")
+    release_date = normalize_release_date(date.group(1)) if date else normalize_release_date(str(initial_data.get("pubTime") or ""))
+    return SourceMovie(title=title, source_url=url, cover_url=cover_url, studio=labeled_value("厂商", "廠商", "片商", "Studio") or initial_maker or legacy_studio, series=labeled_value("系列", "Series") or initial_series or legacy_series, release_date=release_date, duration_minutes=duration_minutes, actresses=actresses)
 
 
 def authentication_state(current_url: str, password_visible: int, domain_cookie_count: int, local_storage_keys: int, session_storage_keys: int, protected_auth_marker: bool = False) -> tuple[str, list[str]]:
@@ -200,6 +235,9 @@ class JphooSource:
 
     def __init__(self, browser: JphooBrowser | None = None, session=None, delay=0.7):
         self.browser, self.session, self.delay = browser, session or requests.Session(), delay
+        # 只在当前扫描进程内复用，不落盘、不记录 Cookie 或令牌。
+        self._magnet_api_headers: dict[str, str] | None = None
+        self._listing_error = ""
     def open_browser(self, profile_dir):
         self.browser = JphooBrowser(profile_dir); return self.browser.open()
     def close(self):
@@ -210,15 +248,38 @@ class JphooSource:
             return series_links_from_html(response.text, url)
         except requests.RequestException:
             return None
+    def _authenticated_links(self, url):
+        """在已登录页面内同源读取分页；不保存 Cookie、令牌或请求头。"""
+        if not self.browser or not self.browser.page:
+            return None
+        try:
+            self._listing_error = ""
+            result = self.browser.page.evaluate("""async target => {
+                const response = await fetch(target, {credentials: "include"});
+                return {ok: response.ok, status: response.status, url: response.url, html: await response.text()};
+            }""", url)
+            if not isinstance(result, dict) or not result.get("ok"):
+                self._listing_error = f"HTTP {result.get('status', 'unknown') if isinstance(result, dict) else 'unknown'}"
+                return None
+            html = str(result.get("html") or "")
+            final_url = str(result.get("url") or "")
+            if "/login" in final_url.lower() or BeautifulSoup(html, "lxml").select_one('input[type="password"]'):
+                raise LoginRequired("JPHOO 分页认证已失效")
+            return series_links_from_html(html, url)
+        except LoginRequired:
+            raise
+        except Exception as exc:
+            self._listing_error = f"{type(exc).__name__}: {str(exc)[:120]}"
+            return None
     def scan_series(self, url, *, start_page=1, stop_event: Event | None = None):
         number, empty = start_page, 0
         while not (stop_event and stop_event.is_set()) and empty < 2:
             target = url if number == 1 else url + ("&" if "?" in url else "?") + f"pageNum={number}"
-            links = self._http_links(target)
+            links = self._authenticated_links(target) if self.browser else self._http_links(target)
             if links is None:
                 if not self.browser or not self.browser.page: raise LoginRequired("JPHOO 列表需要打开浏览器")
                 self.browser.page.goto(target, wait_until="domcontentloaded", timeout=45000); self.browser.page.wait_for_timeout(1200)
-                if self.browser.login_required(): raise LoginRequired("JPHOO 需要重新登录")
+                if self.browser.login_required(): raise LoginRequired(f"JPHOO 需要重新登录；分页后台请求：{self._listing_error or '无可用诊断'}")
                 links = series_links_from_html(self.browser.page.content(), target)
             empty = empty + 1 if not links else 0
             if links: yield number, links
@@ -226,9 +287,19 @@ class JphooSource:
             if self.delay: time.sleep(self.delay)
     def fetch_movie(self, url):
         if not self.browser or not self.browser.page: raise LoginRequired("JPHOO 浏览器尚未打开")
-        page = self.browser.page; page.goto(url, wait_until="domcontentloaded", timeout=45000); page.wait_for_timeout(1000)
+        page = self.browser.page
+        response = page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        page.wait_for_timeout(1000)
         if self.browser.login_required(): raise LoginRequired("JPHOO 需要重新登录")
-        return parse_movie_html(page.content(), url)
+        try:
+            raw_html = response.text() if response else ""
+        except Exception:
+            raw_html = ""
+        try:
+            initial = page.evaluate("() => window.__INITIAL_STATE__?.works?.worksData || null")
+        except Exception:
+            initial = None
+        return parse_movie_html(raw_html or page.content(), url, initial)
     @staticmethod
     def _dom_candidates(page):
         items = []
@@ -238,18 +309,94 @@ class JphooSource:
             except Exception: pass
             items.append(JphooCandidate(node.get_attribute("href") or "", size_bytes(label), label))
         return items
+
+    @staticmethod
+    def _magnet_query(page) -> dict | None:
+        """从当前作品页的公开初始数据构造官方前端使用的查询。"""
+        try:
+            data = page.evaluate("""() => {
+                const state = window.__INITIAL_STATE__ || {};
+                return state?.works?.worksData?.data || null;
+            }""")
+        except Exception:
+            return None
+        if not isinstance(data, dict) or not data.get("id") or not data.get("number"):
+            return None
+        try:
+            mod_id = int(data.get("modId") or 0)
+        except (TypeError, ValueError):
+            mod_id = 0
+        return {
+            "pageNum": 1,
+            "pageSize": 12,
+            "dataId": str(data["id"]),
+            "keyword": str(data["number"]),
+            "modId": mod_id,
+            "order": "dht",
+            "date": 0,
+            "sort": "",
+            "category": "video",
+        }
+
+    def _remember_magnet_request(self, request) -> None:
+        """仅在内存中保留当前登录会话的必要请求头。"""
+        if "/prod-api/v2/dht/list" not in request.url:
+            return
+        try:
+            headers = request.all_headers()
+        except Exception:
+            headers = request.headers
+        excluded = {"content-length", "cookie", "host"}
+        self._magnet_api_headers = {
+            str(key): str(value)
+            for key, value in (headers or {}).items()
+            if str(key).lower() not in excluded and not str(key).startswith(":")
+        }
+
+    def _api_candidates_from_context(self, page) -> list[JphooCandidate] | None:
+        """使用同一 Playwright 认证上下文直接查询；None 表示应回退弹窗。"""
+        if not self._magnet_api_headers or not self.browser or not self.browser.context:
+            return None
+        query = self._magnet_query(page)
+        if not query:
+            return None
+        try:
+            parsed = urlparse(page.url)
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            response = self.browser.context.request.get(
+                f"{origin}/prod-api/v2/dht/list",
+                params=query,
+                headers=self._magnet_api_headers,
+                timeout=20000,
+            )
+            payload = response.json()
+            code = payload.get("code") if isinstance(payload, dict) else None
+            if not response.ok or code not in (None, 0, 200):
+                self._magnet_api_headers = None
+                return None
+            return api_candidates(payload)
+        except Exception:
+            self._magnet_api_headers = None
+            return None
+
     def fetch_magnet_candidates(self):
-        """同一作品页中：接口响应、弹窗 DOM、复制按钮三层回退。"""
+        """认证接口优先，失败时使用弹窗 DOM 和复制按钮回退。"""
         if not self.browser or not self.browser.page: return []
         page = self.browser.page
         direct = self._dom_candidates(page)
         if direct: return direct
+        replayed = self._api_candidates_from_context(page)
+        if replayed is not None:
+            return replayed
         captured: list[JphooCandidate] = []
         def receive(response):
             if "/prod-api/v2/dht/list" in response.url:
                 try: captured.extend(api_candidates(response.json()))
                 except Exception: pass
+        def remember(request):
+            self._remember_magnet_request(request)
         page.evaluate("""(() => { window.__yavCopiedMagnets=[]; const c=navigator.clipboard; if(c&&c.writeText&&!c.__yavHooked){c.writeText=async v=>{if(typeof v==='string'&&v.startsWith('magnet:'))window.__yavCopiedMagnets.push(v); return undefined;}; c.__yavHooked=true;}})();""")
+        page.on("request", remember)
         page.on("response", receive)
         try:
             button = None
@@ -278,6 +425,7 @@ class JphooSource:
             copied = page.evaluate("window.__yavCopiedMagnets || []") or []
             return [JphooCandidate(value, size_bytes(labels[index] if index < len(labels) else ""), labels[index] if index < len(labels) else "") for index, value in enumerate(copied) if str(value).startswith("magnet:")]
         finally:
+            page.remove_listener("request", remember)
             page.remove_listener("response", receive)
 
 def persist_candidates(database, current_movie_id: int, current_title: str, source_url: str, candidates: list[JphooCandidate]) -> dict[str, int]:

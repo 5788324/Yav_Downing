@@ -767,7 +767,7 @@ CREATE INDEX IF NOT EXISTS idx_scan_failures_unresolved ON scan_failures(source,
 
     def save_source_series(self, name, url, enabled=True, series_id=None, source="javdb", profile_dir=None, **_ignored):
         name, url = str(name or "").strip(), str(url or "").strip()
-        if source not in {"javdb", "jphoo"}: raise ValueError("不支持的来源")
+        if source not in {"javdb", "jphoo", "avfan"}: raise ValueError("不支持的来源")
         if not name or not url.startswith(("https://", "http://")): raise ValueError("请填写系列名称和有效网址")
         if not isinstance(enabled, bool): raise ValueError("启用状态必须是布尔值")
         profile_dir = None if profile_dir is None else str(profile_dir).strip()

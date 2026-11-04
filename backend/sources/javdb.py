@@ -38,16 +38,27 @@ def panel_value(soup: BeautifulSoup, *labels: str) -> str:
 
 class JavdbSource:
     name='javdb'; headers={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36'}
-    def __init__(self, session=None, delay=0.6): self.session=session or requests.Session(); self.delay=delay; self._page_cache={}
+    def __init__(self, session=None, delay=1.1):
+        self.session=session or requests.Session(); self.delay=delay; self._page_cache={}; self._last_request_at=0.0
+    def _pace_request(self):
+        remaining = self.delay - (time.monotonic() - self._last_request_at)
+        if remaining > 0: time.sleep(remaining)
+        self._last_request_at = time.monotonic()
     def request(self, url):
         last_error = None
         for attempt in range(3):
             try:
+                self._pace_request()
                 response = self.session.get(url, headers=self.headers, timeout=(5, 20))
                 response.raise_for_status(); response.encoding = 'utf-8'; return response.text
             except requests.RequestException as exc:
                 last_error = exc
-                if attempt < 2: time.sleep(attempt + 1)
+                if attempt < 2:
+                    status = getattr(getattr(exc, 'response', None), 'status_code', None)
+                    retry_after = getattr(getattr(exc, 'response', None), 'headers', {}).get('Retry-After', '')
+                    try: retry_after = max(0.0, float(retry_after))
+                    except (TypeError, ValueError): retry_after = 0.0
+                    time.sleep(max(retry_after, 15.0 * (attempt + 1)) if status == 429 else attempt + 1)
         status = getattr(getattr(last_error, 'response', None), 'status_code', None)
         detail = f"HTTP {status}" if status else type(last_error).__name__ if last_error else '未知请求错误'
         raise RuntimeError(f"JavDB 请求连续失败：{detail}")
@@ -63,7 +74,6 @@ class JavdbSource:
             if page >= start_page:
                 yield page,list(dict.fromkeys(links))
             next_link=soup.select_one('a.pagination-next[rel="next"]'); current=urljoin(base,next_link['href']) if next_link and next_link.get('href') else None; page+=1
-            if current: time.sleep(self.delay)
     def _movie_soup(self, url):
         if url not in self._page_cache: self._page_cache[url] = self.request(url)
         return BeautifulSoup(self._page_cache[url], 'lxml')

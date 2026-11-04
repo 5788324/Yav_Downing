@@ -161,6 +161,14 @@ class ApiTests(unittest.TestCase):
 
 
 class FrontendStaticTests(unittest.TestCase):
+    def test_temporary_lookup_sites_use_encoded_movie_title(self):
+        app = (Path(__file__).parents[1] / "backend" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("https://www.naughtyblog.st/?s=${encodeURIComponent(title)}", app)
+        self.assertIn("https://xxxclub.to/torrents/search?q=${encodeURIComponent(title)}", app)
+        self.assertIn("https://avfan.com/search?q=${encodeURIComponent(title)}&st=all", app)
+        self.assertIn('rel="noopener noreferrer"', app)
+        self.assertIn("不会自动写入资料库", app)
+
     def test_source_panel_safety_contracts(self):
         app = (Path(__file__).parents[1] / "backend" / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn("sourceRefreshInFlight", app)

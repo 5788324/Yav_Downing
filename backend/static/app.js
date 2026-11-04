@@ -17,6 +17,12 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 let movieListRequestId = 0;
 let movieDetailRequestId = 0;
 
+const TEMPORARY_LOOKUP_SITES = [
+  { name: 'NaughtyBlog', search: title => `https://www.naughtyblog.st/?s=${encodeURIComponent(title)}` },
+  { name: 'XXXClub', search: title => `https://xxxclub.to/torrents/search?q=${encodeURIComponent(title)}` },
+  { name: 'AVFan', search: title => `https://avfan.com/search?q=${encodeURIComponent(title)}&st=all` },
+];
+
 function escapeHtml(value = '') {
   return String(value).replace(/[&<>'"]/g, (char) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
@@ -261,9 +267,21 @@ function renderDetail(movie) {
         <div><div class="content-kicker">MAGNET COLLECTION</div><h3>磁链收藏</h3></div>
         <p>共 ${movie.magnets.length} 条唯一 BTIH，按文件大小排序</p>
       </div>
+      ${temporaryLookupLinks(movie.title)}
       ${magnetList(movie.magnets)}
       ${editForm(movie)}
     </section>`;
+}
+
+function temporaryLookupLinks(title) {
+  const links = TEMPORARY_LOOKUP_SITES.map(site => {
+    const url = site.search(title || '');
+    return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">在 ${escapeHtml(site.name)} 查询</a>`;
+  }).join('');
+  return `<aside class="temporary-lookups" aria-label="临时外部查询站点">
+    <div><strong>临时外部查询</strong><small>仅打开站内搜索，不会自动写入资料库</small></div>
+    <div class="temporary-lookup-links">${links}</div>
+  </aside>`;
 }
 
 function magnetList(magnets) {
@@ -477,13 +495,13 @@ function sourcePayload(form, source) {
 function sourceButtons(item, session = {}) {
   const state = item.scan_status || (item.enabled ? 'idle' : 'disabled');
   const locked = ['starting', 'running', 'stopping'].includes(state);
-  const needsLogin = item.source === 'jphoo' && !(session.status === 'ready' && session.login === 'ready' && session.window_open === true);
+  const needsLogin = ['jphoo','avfan'].includes(item.source) && !(session.status === 'ready' && session.login === 'ready' && session.window_open === true);
   const disabled = !item.enabled || locked || needsLogin;
   if (state === 'starting') return '<button disabled>正在启动…</button>';
   if (state === 'running') return `<button data-source="${item.source}" data-stop="${item.id}">停止扫描</button>`;
   if (state === 'stopping') return '<button disabled>正在停止…</button>';
   if (!item.enabled) return `<button data-source="${item.source}" data-toggle="${item.id}" data-enabled="true">启用</button><button data-source="${item.source}" data-edit="${item.id}">编辑</button><button data-source="${item.source}" data-delete="${item.id}">删除</button>`;
-  if (state === 'login_required' || needsLogin) return '<span class="source-hint">请先打开会话并验证 JPHOO 登录</span>';
+  if (state === 'login_required' || needsLogin) return `<span class="source-hint">请先打开并验证 ${item.source.toUpperCase()} 会话</span><button data-source="${item.source}" data-edit="${item.id}">编辑</button><button data-source="${item.source}" data-delete="${item.id}">删除</button>`;
   return `<button data-source="${item.source}" data-scan="${item.id}" ${disabled ? 'disabled' : ''}>从第 1 页重新扫描</button><button data-source="${item.source}" data-continue="${item.id}" ${disabled ? 'disabled' : ''}>继续扫描</button><button data-source="${item.source}" data-edit="${item.id}" ${locked ? 'disabled' : ''}>编辑</button><button data-source="${item.source}" data-toggle="${item.id}" data-enabled="false" ${locked ? 'disabled' : ''}>停用</button><button data-source="${item.source}" data-delete="${item.id}" ${locked ? 'disabled' : ''}>删除</button>`;
 }
 function sourceCard(item, session = {}, appProfile = '') {
@@ -496,19 +514,20 @@ function sourceForm(source, label) {
   return `<form class="source-form" data-source-form="${source}"><h3 data-form-title>添加 ${label} 系列</h3><label><span>系列名称</span><input name="name" placeholder="例如：Vixen" required></label><label><span>系列网址</span><input name="url" type="url" placeholder="${label} 系列网址" required></label><label class="source-check"><input name="enabled" type="checkbox" checked> 启用此系列</label><div class="source-form-actions"><button type="submit">保存系列</button><button type="button" data-cancel-edit hidden>取消编辑</button></div></form>`;
 }
 async function sourcePanel(source, label) {
-  const [rows, scan, login] = await Promise.all([request(`/api/sources/${source}`), request(`/api/sources/${source}/scan`), source === 'jphoo' ? request('/api/sources/jphoo/login') : Promise.resolve({})]);
+  const [rows, scan, login] = await Promise.all([request(`/api/sources/${source}`), request(`/api/sources/${source}/scan`), ['jphoo','avfan'].includes(source) ? request(`/api/sources/${source}/login`) : Promise.resolve({})]);
   sourceScanStates[source] = ['starting','running','stopping'].includes(scan.status);
   const loginState = loginDisplayState(login);
   const currentRows = rows.map(item => (item.id === scan.series_id && ['starting','running','stopping'].includes(scan.status)) ? {...item, ...scan, scan_status: scan.status} : item);
   const loginCard = source === 'jphoo' ? `<section class="source-status-card"><h3>JPHOO 会话：<span data-login-state>${escapeHtml(loginState)}</span></h3><p>统一 Profile：${escapeHtml(login.profile_dir || '正在读取')}<br>目标域名：${escapeHtml(login.target_origin || '请选择系列')}<br>浏览器会话：${login.window_open ? '已打开' : '未打开'} · 最后验证：${escapeHtml(login.last_verified_at || '未验证')}</p><label>登录目标<select id="jphooLoginSeries">${currentRows.filter(item => item.enabled).map(item => `<option value="${item.id}">${escapeHtml(item.name)} · ${escapeHtml(item.url)}</option>`).join('') || '<option value="">请先添加并启用系列</option>'}</select></label><button data-login="open">打开/恢复会话</button><button data-login="check" ${login.window_open ? '' : 'disabled'}>验证登录</button><button data-login="close" ${login.window_open ? '' : 'disabled'}>关闭会话</button></section>` : '';
   const scanText = `当前扫描：${escapeHtml(scan.series_name || '无')} · 来源：${escapeHtml(scan.source || source)} · 状态：${escapeHtml(scan.status || 'idle')} · 当前页：${scan.current_page || scan.page || 0} · 发现：${scan.discovered || 0} · 处理：${scan.processed_count || scan.processed || 0} · 新磁链：${scan.new_magnets || 0} · 失败：${scan.failures || 0}`;
-  return `<section class="source-section" data-source-section="${source}">${source === 'javdb' ? '<h2 id="sourcesTitle">来源管理</h2>' : ''}<h3>${label}</h3>${loginCard}<section class="source-status-card" data-scan-status="${source}">${scanText}</section>${sourceForm(source,label)}<div class="source-cards">${currentRows.map(item => sourceCard(item, login, login.profile_dir || '')).join('') || `<p class="source-empty">尚未配置 ${label} 系列。</p>`}</div></section>`;
+  const avfanCard = source === 'avfan' ? `<section class="source-status-card"><h3>AVFan 会话：<span data-avfan-login>${escapeHtml(loginState)}</span></h3><p>在独立 Edge 窗口手动完成验证后，点击“验证页面”。支持系列和厂商网址。</p><select id="avfanLoginSeries" aria-label="AVFan 验证目标">${currentRows.map(row=>`<option value="${row.id}">${escapeHtml(row.name)}</option>`).join('')}</select>${['open','check','close'].map((action,i)=>`<button data-avfan-login="${action}">${['打开会话','验证页面','关闭会话'][i]}</button>`).join('')}<p>${escapeHtml(login.error || '')}</p></section>` : '';
+  return `<section class="source-section" data-source-section="${source}">${source === 'javdb' ? '<h2 id="sourcesTitle">来源管理</h2>' : ''}<h3>${label}</h3>${loginCard}${avfanCard}<section class="source-status-card" data-scan-status="${source}">${scanText}</section>${sourceForm(source,label)}<div class="source-cards">${currentRows.map(item => sourceCard(item, login, login.profile_dir || '')).join('') || `<p class="source-empty">尚未配置 ${label} 系列。</p>`}</div></section>`;
 }
 function sourcePanelError(label, error) { return `<section class="source-section"><h3>${label}</h3><p class="source-error">${escapeHtml(error.message || '来源状态读取失败')}</p></section>`; }
 async function renderSources() {
   const content = $('#sourceContent'); content.innerHTML = '<p class="source-loading">正在读取来源配置…</p>';
-  const panels = await Promise.allSettled([sourcePanel('javdb', 'JavDB'), sourcePanel('jphoo', 'JPHOO')]);
-  content.innerHTML = panels.map((item, index) => item.status === 'fulfilled' ? item.value : sourcePanelError(index ? 'JPHOO' : 'JavDB', item.reason)).join('');
+  const panels = await Promise.allSettled([sourcePanel('javdb', 'JavDB'), sourcePanel('jphoo', 'JPHOO'), sourcePanel('avfan','AVFan')]);
+  content.innerHTML = panels.map((item, index) => item.status === 'fulfilled' ? item.value : sourcePanelError(['JavDB','JPHOO','AVFan'][index], item.reason)).join('');
 }
 function stopSourcePolling(force = false) { if (sourcePollTimer && (force || !Object.values(sourceScanStates).some(Boolean))) { clearInterval(sourcePollTimer); sourcePollTimer = null; } }
 function ensureSourcePolling() { if (!sourcePageEnding && !sourcePollTimer) sourcePollTimer = setInterval(refreshSourceStatuses, 3000); }
@@ -519,14 +538,15 @@ async function refreshSourceStatuses() {
   sourceRefreshInFlight = true;
   try {
     const scans = {};
-    for (const source of ['javdb','jphoo']) { const scan = await request(`/api/sources/${source}/scan`); scans[source] = scan; const box = $(`[data-scan-status="${source}"]`); if (box) box.textContent = `当前扫描：${scan.series_name || '无'} · 来源：${scan.source || source} · 状态：${scan.status || 'idle'} · 当前页：${scan.current_page || scan.page || 0} · 发现：${scan.discovered || 0} · 处理：${scan.processed_count || scan.processed || 0} · 新磁链：${scan.new_magnets || 0} · 失败：${scan.failures || 0}`; }
+    for (const source of ['javdb','jphoo','avfan']) { const scan = await request(`/api/sources/${source}/scan`); scans[source] = scan; const box = $(`[data-scan-status="${source}"]`); if (box) box.textContent = `当前扫描：${scan.series_name || '无'} · 来源：${scan.source || source} · 状态：${scan.status || 'idle'} · 当前页：${scan.current_page || scan.page || 0} · 发现：${scan.discovered || 0} · 处理：${scan.processed_count || scan.processed || 0} · 新磁链：${scan.new_magnets || 0} · 失败：${scan.failures || 0}`; }
     const login = !$('#sourceOverlay').hidden ? await request('/api/sources/jphoo/login') : null;
+    const avfanLogin = !$('#sourceOverlay').hidden ? await request('/api/sources/avfan/login') : null;
     sourceStatusFailures = 0;
     const transition = reconcileScanStates(sourceScanStates, scans); Object.assign(sourceScanStates, transition.next);
-    const loginPolling = login && (new Set(['opening','checking','closing']).has(login.status) || new Set(['opening','checking','closing']).has(login.login));
+    const loginPolling = [login,avfanLogin].some(item=>item && ['opening','checking','closing'].includes(item.status));
     if (transition.refreshLibrary) await Promise.all([loadFilters(), loadMovies({ silent: true })]);
 const shownLogin = $('[data-login-state]')?.textContent?.trim() || '';
-    const loginChanged = Boolean(login && shownLogin !== loginDisplayState(login));
+    const loginChanged = Boolean(login && shownLogin !== loginDisplayState(login)) || Boolean(avfanLogin && $('[data-avfan-login]')?.textContent.trim() !== loginDisplayState(avfanLogin));
     if ((transition.stoppedSources.length || loginPolling || loginChanged) && !$('#sourceOverlay').hidden) await renderSources();
     if (!Object.values(transition.next).some(Boolean) && !loginPolling) stopSourcePolling();
   } catch (_) {
@@ -555,6 +575,7 @@ $('#sourceContent').addEventListener('submit', event => {
 $('#sourceContent').addEventListener('click', event => {
   const button = event.target.closest('button'); if (!button) return;
   const source = button.dataset.source;
+  if (button.dataset.avfanLogin) return sourceAction(button, async()=>{await request(`/api/sources/avfan/login/${button.dataset.avfanLogin}`,{method:'POST',body:JSON.stringify({series_id:Number($('#avfanLoginSeries')?.value)})});ensureSourcePolling();});
 if (button.dataset.login) { const series=$('#jphooLoginSeries'); const payload=button.dataset.login === 'open' ? {series_id:Number(series?.value || 0)} : {}; return sourceAction(button, async () => { await request(`/api/sources/jphoo/login/${button.dataset.login}`, {method:'POST',body:JSON.stringify(payload)}); ensureSourcePolling(); }); }
   if (button.hasAttribute('data-cancel-edit')) { const form=button.closest('form'); form.reset(); delete form.dataset.editId; button.hidden=true; form.querySelector('[data-form-title]').textContent=`添加 ${form.dataset.sourceForm === 'jphoo' ? 'JPHOO' : 'JavDB'} 系列`; return; }
   if (!source) return;

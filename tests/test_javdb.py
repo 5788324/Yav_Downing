@@ -1,4 +1,7 @@
 import unittest
+from unittest.mock import patch
+
+import requests
 
 from backend.sources.javdb import JavdbSource, size_bytes
 
@@ -29,6 +32,21 @@ class Fake:
 
 
 class JavdbTests(unittest.TestCase):
+    def test_requests_are_paced_and_429_uses_retry_after(self):
+        class Response:
+            def __init__(self, status, text='ok', headers=None):
+                self.status_code, self.text, self.headers = status, text, headers or {}
+                self.encoding = None
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise requests.HTTPError(response=self)
+        class Session:
+            def __init__(self): self.responses=[Response(429, headers={'Retry-After':'20'}), Response(200)]
+            def get(self, *_args, **_kwargs): return self.responses.pop(0)
+        with patch('backend.sources.javdb.time.monotonic', side_effect=[10.0, 10.0, 31.0, 31.0]), patch('backend.sources.javdb.time.sleep') as sleep:
+            source = JavdbSource(session=Session(), delay=1.1)
+            self.assertEqual(source.request('https://javdb.com/v/test'), 'ok')
+        self.assertTrue(any(call.args == (20.0,) for call in sleep.call_args_list))
     def test_movie_and_magnets_share_one_cached_page_request(self):
         calls = []
         class Response:
