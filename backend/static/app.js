@@ -1,3 +1,4 @@
+import { monthlyUpdateReminder, updateReminderLine } from './update-reminder.js';
 import { reconcileScanStates } from './scan-state.js';
 
 const state = {
@@ -122,6 +123,15 @@ async function loadFilters() {
   state.filters.series = fillSelect('#seriesFilter', state.filterData.series, '全部系列', '未分类系列');
   state.filters.actress = fillDatalist('#actressFilter', '#actressOptions', state.filterData.actresses);
   state.filters.source = fillSelect('#sourceFilter', state.filterData.sources, '全部磁链来源');
+  await loadSeriesReminders();
+}
+
+async function loadSeriesReminders() {
+  const box = $('#librarySeriesReminders');
+  if (!box) return;
+  const panels = await Promise.allSettled(['javdb','jphoo','avfan'].map(source => request(`/api/sources/${source}`)));
+  const rows = panels.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+  box.innerHTML = rows.map(item => `<div class="series-update-row"><strong>${escapeHtml(item.name)} <small>· ${escapeHtml(item.source.toUpperCase())}</small></strong><span>上次更新：${escapeHtml(displayDate(item.last_scanned_at) || '尚未扫描')}</span><span class="${monthlyUpdateReminder(item) ? 'source-hint' : ''}">${escapeHtml(updateReminderLine(item))}</span></div>`).join('') + (panels.some(result => result.status === 'rejected') ? '<p>部分来源提醒读取失败，请刷新重试。</p>' : '');
 }
 
 function fillSelect(selector, values, allLabel, unknownLabel = '') {
@@ -507,7 +517,7 @@ function sourceButtons(item, session = {}) {
 function sourceCard(item, session = {}, appProfile = '') {
   const stats = `页 ${item.current_page || item.last_completed_page || 0} · 发现 ${item.discovered || 0} · 处理 ${item.processed_count || 0} · 新磁链 ${item.new_magnets || 0} · 失败 ${item.failures || 0}`;
   const legacyProfile = item.source === 'jphoo' && item.profile_dir && item.profile_dir !== appProfile ? '<br><small class="source-hint">旧版系列 Profile 已不再使用；当前统一使用上方应用 Profile。</small>' : '';
-  return `<article class="source-card" data-source-card="${item.source}-${item.id}"><div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.url)}</p><small>${item.enabled ? '已启用' : '已停用'} · ${stats}${item.last_error ? ` · ${escapeHtml(item.last_error)}` : ''}</small>${legacyProfile}</div><div class="source-actions">${sourceButtons(item, session)}</div></article>`;
+  return `<article class="source-card" data-source-card="${item.source}-${item.id}"><div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.url)}</p><small>${item.enabled ? '已启用' : '已停用'} · ${stats}${item.last_error ? ` · ${escapeHtml(item.last_error)}` : ''}</small>${legacyProfile}<p>上次完整扫描：${escapeHtml(item.last_scanned_at || '尚未扫描')}</p><p class="source-hint">${escapeHtml(updateReminderLine(item))}</p></div><div class="source-actions">${sourceButtons(item, session)}</div></article>`;
 }
 function loginDisplayState(login = {}) { const status=String(login.status || ''); const stable=String(login.login || ''); return ['opening','checking','closing'].includes(status) ? status : (status || stable || 'unknown'); }
 function sourceForm(source, label) {

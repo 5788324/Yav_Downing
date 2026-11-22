@@ -1,8 +1,9 @@
 """AVFan 浏览器与扫描在同一工作线程中运行。"""
-from queue import Queue
+from queue import Queue, Empty
+from urllib.parse import urlparse
 from threading import Thread, RLock, Event
 from .scan_avfan import AvfanScanner
-from .sources.avfan import AvfanSource, checked_soup, validate_url
+from .sources.avfan import AvfanSource, AvfanSessionError, checked_soup, validate_url
 
 
 class AvfanSession:
@@ -50,6 +51,7 @@ class AvfanSession:
             row = self.db.get_source_series(sid, 'avfan')
             if not row or not row['enabled']: raise ValueError('来源不存在或已停用')
             self.cancel.clear()
+            self.state = {'status':'scanning', 'login':'unknown', 'window_open':True}
             self.result = {'status':'starting','source':'avfan','series_id':sid,'series_name':row['name'],'running':True}
             self.queue.put(('scan',(sid, from_start)))
             return dict(self.result)
@@ -71,7 +73,17 @@ class AvfanSession:
         context = pw = page = None
         try:
             while True:
-                action, data = self.queue.get()
+                try:
+                    action, data = self.queue.get(timeout=0.2)
+                except Empty:
+                    if page:
+                        try:
+                            page.wait_for_timeout(10)
+                            if page.is_closed():
+                                with self.lock: self.state = {'status':'closed','login':'closed','window_open':False}
+                        except Exception:
+                            with self.lock: self.state = {'status':'closed','login':'closed','window_open':False}
+                    continue
                 try:
                     if action in {'close','shutdown'}:
                         if context: context.close()
@@ -80,6 +92,12 @@ class AvfanSession:
                         with self.lock: self.state = {'status':'closed','login':'closed','window_open':False}
                         if action == 'shutdown': return
                     elif action == 'open':
+                        if page and page.is_closed():
+                            try:
+                                if context: context.close()
+                            finally:
+                                if pw: pw.stop()
+                                context = pw = page = None
                         if not context:
                             from playwright.sync_api import sync_playwright
                             pw = sync_playwright().start()
@@ -90,6 +108,7 @@ class AvfanSession:
                     elif action == 'check':
                         if not page or page.is_closed(): raise ValueError('AVFan 浏览器已关闭')
                         validate_url(page.url); soup = checked_soup(page.content())
+                        if not urlparse(page.url).path.startswith(('/zh-CN/series/', '/zh-CN/makers/', '/zh-CN/movies/', '/series/', '/makers/', '/movies/')): raise ValueError('请完成登录并打开系列或影片页面')
                         if not soup.select_one('h1, h2'): raise ValueError('请打开正常的系列或影片页面')
                         with self.lock: self.state = {'status':'ready','login':'ready','window_open':True}
                     elif action == 'scan':
@@ -97,17 +116,15 @@ class AvfanSession:
                         scanner = AvfanScanner(self.db)
                         def load(url):
                             if self.cancel.is_set(): scanner.stop(); raise RuntimeError('扫描已停止')
-                            response = page.goto(url, wait_until='domcontentloaded', timeout=30000)
-                            html = page.content()
                             try:
+                                if not page or page.is_closed(): raise AvfanSessionError('AVFan 浏览器已关闭')
+                                response = page.goto(url, wait_until='domcontentloaded', timeout=30000)
+                                html = page.content()
                                 checked_soup(html)
-                                if response and response.status in {401,403,429}: raise RuntimeError(f'AVFan HTTP {response.status}，请检查验证或限流状态')
-                            except RuntimeError:
-                                scanner.stop()
-                                with self.lock: self.state = {'status':'login_required','login':'unknown','window_open':True}
-                                raise
-                            if response and response.status >= 400: raise RuntimeError(f'AVFan HTTP {response.status}')
-                            return html
+                                if response and response.status >= 400: raise AvfanSessionError(f'AVFan HTTP {response.status}，请检查验证或限流状态')
+                                return html
+                            except Exception as exc:
+                                raise AvfanSessionError(str(exc)) from exc
                         scanner.source_factory = lambda: AvfanSource(loader=load)
                         with self.lock:
                             self.scanner = scanner
@@ -115,11 +132,17 @@ class AvfanSession:
                         if self.cancel.is_set(): result = {'status':'stopped'}
                         else: result = scanner.run(sid, full)
                         with self.lock: self.result = {**self.result, **result, 'running':False}; self.scanner = None
+                        with self.lock:
+                            opened = bool(page and not page.is_closed())
+                            self.state = {'status':'window_open' if opened else 'closed','login':'unknown' if opened else 'closed','window_open':opened}
                         self.cancel.clear()
                 except Exception as exc:
                     with self.lock:
                         if action == 'scan': self.result = {**self.result,'status':'failed','running':False,'message':str(exc)[:200]}; self.scanner = None
                         else: self.state = {'status':'failed','login':'unknown','window_open':bool(page and not page.is_closed()),'error':str(exc)[:200]}
+                    with self.lock:
+                        opened = bool(page and not page.is_closed())
+                        self.state = {'status':'failed' if opened else 'closed','login':'unknown','window_open':opened,'error':str(exc)[:200]}
                     self.cancel.clear()
         finally:
             if context: context.close()

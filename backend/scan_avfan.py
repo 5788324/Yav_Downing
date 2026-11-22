@@ -5,11 +5,13 @@ import signal
 from pathlib import Path
 from .db import LibraryDatabase
 from .scanner import JavdbScanner
-from .sources.avfan import AvfanSource, validate_url
+from .sources.avfan import AvfanSource, AvfanSessionError, validate_url
 
 
 class AvfanScanner(JavdbScanner):
     source_name = 'avfan'
+    fatal_errors = (AvfanSessionError,)
+    require_successful_page = True
     source_factory = staticmethod(AvfanSource)
 
 
@@ -30,9 +32,12 @@ def main():
             page.goto(args.url, wait_until='domcontentloaded', timeout=30000)
             input('请在此独立 Edge 确认页面正常（如需验证请手动完成），然后按 Enter 开始：')
             def load(url):
-                response = page.goto(url, wait_until='domcontentloaded', timeout=30000)
-                if response and response.status >= 400: raise RuntimeError(f'AVFan HTTP {response.status}')
-                return page.content()
+                try:
+                    response = page.goto(url, wait_until='domcontentloaded', timeout=30000)
+                    if response and response.status >= 400: raise AvfanSessionError(f'AVFan HTTP {response.status}')
+                    return page.content()
+                except Exception as exc:
+                    raise AvfanSessionError(str(exc)) from exc
             # 在初始化数据库前验证首个页面，避免验证失败留下空库。
             from .sources.avfan import checked_soup
             checked_soup(page.content())

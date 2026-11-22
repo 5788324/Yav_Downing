@@ -47,6 +47,8 @@ class BaseScanner:
 class JavdbScanner(BaseScanner):
     source_name = "javdb"
     source_factory = None
+    fatal_errors = ()
+    require_successful_page = False
     def _process_url(self, source, series, series_id, url, page, stats):
         stats["discovered"] += 1
         data = source.fetch_movie(url)
@@ -68,7 +70,9 @@ class JavdbScanner(BaseScanner):
                     self._process_url(source, series, series_id, failure["source_url"], failure["page"], stats)
                     stats["resolved_failures"] += 1
                 except Exception as exc:
+                    if isinstance(exc, self.fatal_errors): raise
                     stats["failures"] += 1; error = str(exc); self._record_failure(series_id, failure["source_url"], failure["page"], exc)
+                    if self.require_successful_page: raise
             if not self.stop_event.is_set():
                 for page, urls in source.scan_series(series["url"], start_page=page, stop_event=self.stop_event):
                     page_completed = True
@@ -77,9 +81,13 @@ class JavdbScanner(BaseScanner):
                         try:
                             self._process_url(source, series, series_id, url, page, stats)
                         except Exception as exc:
+                            if isinstance(exc, self.fatal_errors): raise
+                            if self.require_successful_page: page_completed = False
                             stats["failures"] += 1; error = str(exc); self._record_failure(series_id, url, page, exc)
                     self._save_progress(series_id, run_id, page, stats, error, page_completed)
-                    if not page_completed: break
+                    if not page_completed:
+                        if self.require_successful_page and not self.stop_event.is_set(): raise RuntimeError(error)
+                        break
             status = "stopped" if self.stop_event.is_set() else "completed"
         except Exception as exc:
             status = "failed"; stats["failures"] += 1; error = str(exc)

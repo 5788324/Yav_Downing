@@ -36,10 +36,16 @@ def validate_url(url):
     return url
 
 
+class AvfanSessionError(RuntimeError):
+    """会话失效时必须停止导航，交还窗口供人工处理。"""
+
+
 def checked_soup(html):
     soup = BeautifulSoup(html, 'lxml')
     if soup.select_one('#challenge-running, #challenge-form') or 'Just a moment' in (soup.title.get_text() if soup.title else ''):
-        raise RuntimeError('AVFan 需要在采集器浏览器中完成人机验证')
+        raise AvfanSessionError('AVFan 需要在采集器浏览器中完成人机验证')
+    if soup.select_one('input[type=password]'):
+        raise AvfanSessionError('AVFan 需要在采集器浏览器中完成登录')
     return soup
 
 
@@ -47,7 +53,7 @@ def parse_movie(html, url):
     soup = checked_soup(html)
     info = soup.select_one('dl.movie-info')
     if not info or not soup.select_one('h1'):
-        raise ValueError('AVFan 影片资料区缺失，可能需要验证或登录')
+        raise AvfanSessionError('AVFan 影片资料区缺失，可能需要验证或登录')
     fields = {}
     for dt in info.select('dt'):
         dd = dt.find_next_sibling('dd')

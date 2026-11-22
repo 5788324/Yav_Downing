@@ -321,3 +321,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .clear-btn { grid-column: 1/-1; }
   #sourceContent { padding: 24px 20px 30px; }
 }
+
+.library-update-reminders { margin-bottom: 20px; border: 1px solid var(--border, #ddd); border-radius: 10px; padding: 12px 16px; }
+.library-update-reminders summary { cursor: pointer; font-weight: 600; }
+.series-update-row { display: flex; flex-wrap: wrap; gap: 8px 20px; padding: 10px 0; border-bottom: 1px solid var(--border, #ddd); font-size: 13px; }
+.series-update-row:last-child { border-bottom: 0; }
+.series-update-row strong { min-width: 190px; }
+.series-update-row small { font-weight: normal; }
+
+#librarySeriesReminders { max-height: 300px; overflow-y: auto; }
