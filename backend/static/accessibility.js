@@ -1,5 +1,5 @@
 (() => {
-  const labels = { searchInput: '搜索影片名', pageSize: '每页显示数量', openSources: '来源管理' };
+  const labels = { searchInput: '搜索影片名', pageSize: '每页显示数量', openSources: '来源设置' };
   function normalizeDialogElements() {
     document.querySelectorAll('article.detail-panel[role="dialog"]').forEach(article => {
       const dialog = document.createElement('div');

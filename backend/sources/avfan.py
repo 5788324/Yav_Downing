@@ -2,7 +2,7 @@
 import re
 from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
 from bs4 import BeautifulSoup
-from .javdb import JavdbSource, SourceMovie, SourceMagnet, size_bytes
+from .javdb import JavdbSource, JavdbSessionError, SourceMovie, SourceMagnet, size_bytes
 from ..db import normalize_btih
 from datetime import date
 from urllib.parse import unquote_plus
@@ -95,7 +95,11 @@ class AvfanSource(JavdbSource):
         if self.loader:
             self._pace_request()
             return self.loader(url)
-        return super().request(url)
+        try: return super().request(url)
+        except JavdbSessionError as exc: raise AvfanSessionError(str(exc)) from exc
+    def _movie_soup(self,url):
+        if url not in self._page_cache: self._page_cache[url] = self.request(url)
+        return checked_soup(self._page_cache[url])
     def fetch_movie(self, url):
         return parse_movie(str(self._movie_soup(url)), url)
     def fetch_magnets(self, url):

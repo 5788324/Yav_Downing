@@ -44,7 +44,7 @@ class AvfanSession:
             self.queue.put((action, url))
             return dict(self.state)
 
-    def start(self, sid, from_start=False):
+    def start(self, sid, from_start=False, retry_only=False):
         with self.lock:
             if self.result.get('running'): raise ValueError('AVFan 已有扫描正在运行')
             if self.state['status'] != 'ready' or not self.state['window_open']: raise ValueError('请先打开 AVFan 会话并验证页面')
@@ -53,7 +53,7 @@ class AvfanSession:
             self.cancel.clear()
             self.state = {'status':'scanning', 'login':'unknown', 'window_open':True}
             self.result = {'status':'starting','source':'avfan','series_id':sid,'series_name':row['name'],'running':True}
-            self.queue.put(('scan',(sid, from_start)))
+            self.queue.put(('scan',(sid, from_start, retry_only)))
             return dict(self.result)
 
     def stop(self, sid=None):
@@ -112,8 +112,9 @@ class AvfanSession:
                         if not soup.select_one('h1, h2'): raise ValueError('请打开正常的系列或影片页面')
                         with self.lock: self.state = {'status':'ready','login':'ready','window_open':True}
                     elif action == 'scan':
-                        sid, full = data
+                        sid, full, retry_only = data
                         scanner = AvfanScanner(self.db)
+                        scanner.retry_only = retry_only
                         def load(url):
                             if self.cancel.is_set(): scanner.stop(); raise RuntimeError('扫描已停止')
                             try:

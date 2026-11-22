@@ -3,143 +3,91 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#11110f">
-  <title>Yav · 私人影片图书馆</title>
+  <meta name="theme-color" content="#f7f6f2">
+  <title>Yav · 我的片库</title>
   <link rel="stylesheet" href="/assets/styles.css">
   <link rel="stylesheet" href="/assets/accessibility.css">
 </head>
 <body>
-  <div class="app-shell">
-    <aside class="sidebar">
-      <div class="brand-block">
-        <div class="brand-mark">Y</div>
-        <div>
-          <div class="brand-name">Yav</div>
-          <div class="brand-subtitle">私人磁链图书馆</div>
-        </div>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand-block"><div class="brand-mark">Y</div><div><div class="brand-name">Yav</div><div class="brand-subtitle">私人影片图书馆</div></div></div>
+    <nav class="nav-stack" aria-label="片库导航">
+      <button class="nav-item is-active" data-quick="all" aria-current="page"><span class="nav-icon">▦</span><span>全部影片</span><strong id="navTotal">0</strong></button>
+      <button class="nav-item" data-quick="favorite"><span class="nav-icon">♥</span><span>我的收藏</span><strong id="navFavorites">0</strong></button>
+      <button class="nav-item" data-quick="with-magnets"><span class="nav-icon">⌁</span><span>已有磁链</span><strong id="navWithMagnets">0</strong></button>
+      <button class="nav-item" data-quick="without-magnets"><span class="nav-icon">○</span><span>等待补全</span><strong id="navWithoutMagnets">0</strong></button>
+    </nav>
+    <div class="sidebar-section library-navigation">
+      <span class="section-kicker">整理片库</span>
+      <button id="openLibraryTools" class="category-link">更新资料库</button>
+      <button id="openSources" class="category-link">来源设置</button>
+    </div>
+    <div class="sidebar-foot"><span class="local-badge">保存在这台电脑</span><button id="shutdownApp" type="button" aria-label="安全退出 Yav">退出应用</button></div>
+  </aside>
+  <main class="main-stage">
+    <header class="topbar">
+      <div><h1>我的片库</h1><p class="library-counts"><span id="statMovies">0</span> 部影片 <span class="count-dot">·</span> <span id="statMagnets">0</span> 条磁链 <span class="count-dot">·</span> <span id="statFavorites">0</span> 部收藏</p></div>
+    </header>
+    <section class="filter-panel" aria-label="查找影片">
+      <div class="search-line">
+        <label class="search-box"><input id="searchInput" type="search" placeholder="搜索影片名" autocomplete="off" aria-label="搜索影片名"></label>
+        <label class="primary-series"><span class="sr-only">系列</span><select id="seriesFilter" aria-label="系列"></select></label>
+        <button id="toggleFilters" class="quiet-button" aria-expanded="false" aria-controls="filterFields">筛选 <span id="filterCount"></span></button>
       </div>
-
-      <nav class="nav-stack" aria-label="快速筛选">
-        <button class="nav-item is-active" data-quick="all" aria-current="page" aria-label="全部影片">
-          <span class="nav-icon">▦</span><span>全部影片</span><strong id="navTotal">0</strong>
-        </button>
-        <button class="nav-item" data-quick="favorite" aria-label="我的收藏">
-          <span class="nav-icon">♥</span><span>我的收藏</span><strong id="navFavorites">0</strong>
-        </button>
-        <button class="nav-item" data-quick="with-magnets" aria-label="已有磁链">
-          <span class="nav-icon">⌁</span><span>已有磁链</span><strong id="navWithMagnets">0</strong>
-        </button>
-        <button class="nav-item" data-quick="without-magnets" aria-label="等待补全">
-          <span class="nav-icon">○</span><span>等待补全</span><strong id="navWithoutMagnets">0</strong>
-        </button>
-        <div class="nav-divider" aria-hidden="true"></div>
-        <button class="nav-item" id="openSources" type="button" aria-label="来源管理">
-          <span class="nav-icon">⌘</span><span>来源管理</span><strong>›</strong>
-        </button>
-      </nav>
-
-      <section class="sidebar-section">
-        <div class="section-kicker">分类浏览</div>
-        <button class="category-link" data-focus="studio"><span>厂商</span><small>按制作方筛选</small></button>
-        <button class="category-link" data-focus="series"><span>系列</span><small>按作品系列筛选</small></button>
-        <button class="category-link" data-focus="actress"><span>演员</span><small>输入姓名筛选</small></button>
-      </section>
-
-      <button id="shutdownApp" class="clear-btn" type="button" aria-label="安全退出 Yav">安全退出 Yav</button>
-      <div class="sidebar-foot">
-        <div class="local-badge"><span class="pulse"></span>仅在本机运行</div>
-        <p>磁链是核心，资料由多个来源互补。</p>
-      </div>
-    </aside>
-
-    <main class="main-stage">
-      <header class="topbar">
-        <div>
-          <div class="eyebrow">MY PRIVATE ARCHIVE</div>
-          <h1>影片图书馆</h1>
-          <p id="resultSummary">正在读取资料库…</p>
-        </div>
-        <div class="topbar-actions">
-          <div class="view-switcher" aria-label="视图风格">
-            <button class="view-btn is-active" aria-pressed="true" data-view="gallery" title="海报墙">海报墙</button>
-            <button class="view-btn" aria-pressed="false" data-view="shelf" title="收藏架">收藏架</button>
-            <button class="view-btn" aria-pressed="false" data-view="catalog" title="资料册">资料册</button>
-          </div>
-        </div>
-      </header>
-
-      <section class="hero-panel">
-        <div class="hero-copy">
-          <span class="hero-tag">MULTI-SOURCE LIBRARY</span>
-          <h2>把分散在不同来源的磁链，整理成一座自己的图书馆。</h2>
-          <p>影片名负责识别，磁链负责收藏；封面、厂商、系列和演员信息由 JavDB、JPHOO 与未来来源逐步补全。</p>
-        </div>
-        <div class="hero-stats">
-          <article><span>影片</span><strong id="statMovies">0</strong></article>
-          <article><span>唯一磁链</span><strong id="statMagnets">0</strong></article>
-          <article><span>收藏</span><strong id="statFavorites">0</strong></article>
-        </div>
-      </section>
-
-      <section class="filter-panel">
-        <label class="search-box">
-          <span>⌕</span>
-          <input id="searchInput" type="search" placeholder="搜索影片名" autocomplete="off" aria-label="搜索影片名">
-          <span class="search-hint">输入即筛选</span>
-        </label>
+      <div id="filterFields" hidden>
         <div class="filter-grid">
           <label><span>厂商</span><select id="studioFilter"></select></label>
-          <label><span>系列</span><select id="seriesFilter"></select></label>
           <label><span>演员</span><input id="actressFilter" list="actressOptions" autocomplete="off" placeholder="全部演员" aria-label="演员"></label><datalist id="actressOptions"></datalist>
+          <label><span>发行年份</span><select id="releaseYear"><option value="">全部年份</option></select></label>
+          <label><span>时长</span><select id="durationFilter"><option value="">全部时长</option><option value="short">30 分钟以内</option><option value="medium">30～60 分钟</option><option value="long">60 分钟以上</option><option value="unknown">时长未知</option></select></label>
           <label><span>磁链来源</span><select id="sourceFilter" aria-label="磁链来源"></select></label>
-          <label><span>磁链状态</span>
-            <select id="magnetFilter">
-              <option value="">全部</option>
-              <option value="true">有磁链</option>
-              <option value="false">无磁链</option>
-            </select>
-          </label>
-          <button id="clearFilters" class="clear-btn">清除筛选</button>
+          <label><span>磁链情况</span><select id="magnetFilter"><option value="">不限</option><option value="true">已有磁链</option><option value="false">暂无磁链</option></select></label>
+          <label><span>待补资料</span><select id="missingFilter"><option value="">不限</option><option value="cover">未登记封面</option><option value="studio">缺少厂商</option><option value="series">缺少系列</option><option value="date">缺少日期</option><option value="actresses">缺少演员</option></select></label>
+          <label><span>发行日期从</span><input id="dateFrom" type="date"></label>
+          <label><span>发行日期至</span><input id="dateTo" type="date"></label>
         </div>
-      </section>
-
-      <section class="content-head">
-        <div>
-          <span class="content-kicker">LIBRARY SELECTION</span>
-          <h3 id="contentTitle">全部影片</h3>
-        </div>
-        <div class="page-size-control">
-          <span>每页</span>
-          <select id="pageSize" aria-label="每页显示数量">
-            <option value="24">24</option>
-            <option value="36" selected>36</option>
-            <option value="48">48</option>
-            <option value="72">72</option>
-          </select>
-        </div>
-      </section>
-
-      <details class="library-update-reminders" open>
-        <summary>系列更新提醒 · 每月一次</summary>
-        <div id="librarySeriesReminders" aria-live="polite">正在读取各系列更新时间…</div>
-      </details>
-
-      <section id="movieGrid" class="movie-grid view-gallery" aria-live="polite"></section>
-      <div id="emptyState" class="empty-state" hidden>
-        <div class="empty-symbol">⌁</div>
-        <h3>没有找到符合条件的影片</h3>
-        <p>尝试清除部分筛选，或等待其他来源补全资料。</p>
-        <button id="emptyClear">显示全部影片</button>
+        <div class="filter-footer"><button id="clearFilters" class="text-button">清除筛选</button><button id="closeFilters" class="quiet-button">收起</button></div>
       </div>
-
-      <footer class="pagination" id="pagination">
-        <button id="prevPage">← 上一页</button>
-        <div id="pageNumbers" class="page-numbers"></div>
-        <button id="nextPage">下一页 →</button>
-      </footer>
-    </main><div id="sourceOverlay" class="overlay" hidden><article class="detail-panel source-panel" role="dialog" aria-modal="true" aria-labelledby="sourcesTitle"><button id="closeSources" class="close-button" aria-label="关闭来源管理">×</button><div id="sourceContent"></div></article></div>
-  </div>
-
+    </section>
+    <div id="activeFilters" class="active-filters"></div>
+    <section class="content-head">
+      <div class="collection-title"><h2 id="contentTitle">全部影片</h2><span id="resultSummary">正在读取…</span></div>
+      <div class="collection-actions">
+        <select id="sortFilter" aria-label="排列顺序"><option value="">最新发行</option><option value="added">最近入库</option><option value="magnets">最近有新磁链</option><option value="title">影片名</option><option value="favorite">收藏优先</option></select>
+        <div class="view-switcher" aria-label="浏览方式"><button class="view-btn is-active" aria-pressed="true" data-view="gallery">海报墙</button><button class="view-btn" aria-pressed="false" data-view="shelf">收藏架</button><button class="view-btn" aria-pressed="false" data-view="catalog">资料册</button></div>
+        <button id="toggleSelection" class="text-button">选择</button>
+        <details id="exportMenu" class="export-menu"><summary>导出</summary><div class="export-popover"><small id="exportHint">当前筛选结果</small><button id="exportCsv">影片资料表 · CSV</button><button id="exportTxt">磁链列表 · TXT</button></div></details>
+      </div>
+    </section>
+    <div id="updateScope" class="update-scope" hidden></div>
+    <details class="library-update-reminders"><summary>系列更新 <span id="reminderSummary"></span></summary><div id="librarySeriesReminders">正在读取更新时间…</div></details>
+    <section id="movieGrid" class="movie-grid view-gallery" aria-live="polite"></section>
+    <div id="emptyState" class="empty-state" hidden><h3>没有找到影片</h3><p>换个关键词，或清除筛选试试。</p><button id="emptyClear">显示全部影片</button></div>
+    <footer class="pagination" id="pagination"><button id="prevPage">← 上一页</button><div id="pageNumbers" class="page-numbers"></div><button id="nextPage">下一页 →</button><label class="page-size-control">每页 <select id="pageSize" aria-label="每页显示数量"><option value="24">24</option><option value="36" selected>36</option><option value="48">48</option><option value="72">72</option></select></label></footer>
+    <div id="selectionBar" class="selection-bar" hidden><strong id="selectedCount">未选择影片</strong><button id="selectPage">选择本页</button><button id="clearSelection">清空</button><button id="batchFavorite">收藏</button><button id="batchUnfavorite">取消收藏</button><button id="finishSelection">完成</button></div>
+  </main>
+  <div id="sourceOverlay" class="overlay" hidden><article class="detail-panel source-panel" role="dialog" aria-modal="true" aria-labelledby="sourcesTitle"><button id="closeSources" class="close-button" aria-label="关闭来源设置">×</button><div id="sourceContent"></div></article></div>
+</div>
+<dialog id="libraryToolsDialog" class="library-dialog" aria-labelledby="libraryToolsTitle">
+  <div class="tools-heading"><div><h2 id="libraryToolsTitle">整理资料库</h2><p>更新影片，让收藏慢慢完整。</p></div><button id="closeLibraryTools" class="quiet-button">关闭</button></div>
+  <nav class="tools-tabs" aria-label="资料库工具" role="tablist">
+    <button role="tab" id="tab-updates" aria-selected="true" aria-controls="panel-updates" data-panel="updates">更新</button>
+    <button role="tab" id="tab-results" aria-selected="false" aria-controls="panel-results" data-panel="results">最近收录</button>
+    <button role="tab" id="tab-failures" aria-selected="false" aria-controls="panel-failures" data-panel="failures">待处理</button>
+    <button role="tab" id="tab-backups" aria-selected="false" aria-controls="panel-backups" data-panel="backups">备份</button>
+  </nav>
+  <section id="panel-updates" role="tabpanel" aria-labelledby="tab-updates">
+    <div class="panel-intro"><div><h3>这次更新哪些系列？</h3><p>更新前会自动备份，已有资料会保留。</p></div><button id="editSourceSettings" class="text-button">来源设置</button></div>
+    <div class="series-selection"><button id="selectJavdb" class="text-button">选择 JavDB 系列</button><button id="clearQueueSources" class="text-button">清空选择</button></div>
+    <div id="queueSources" class="series-grid"></div>
+    <div class="update-actions"><button id="startQueue" class="primary-button">更新所选系列</button><button id="retryQueue" class="text-button">重试所选系列的失败项</button></div>
+    <div id="queueProgress" aria-live="polite"></div><div class="queue-actions"><button id="resumeQueue" class="primary-button" hidden>继续更新</button><button id="stopQueue" class="quiet-button" hidden>停止更新</button></div>
+  </section>
+  <section id="panel-results" role="tabpanel" aria-labelledby="tab-results" hidden><div class="panel-intro"><div><h3>最近的更新</h3><p>新影片与补充的磁链，都在这里。</p></div></div><div id="scanHistory"></div></section>
+  <section id="panel-failures" role="tabpanel" aria-labelledby="tab-failures" hidden><div class="panel-intro"><div><h3>留待处理</h3><p>个别页面暂时无法读取，不影响已经收录的内容。</p></div></div><div id="scanFailures"></div></section>
+  <section id="panel-backups" role="tabpanel" aria-labelledby="tab-backups" hidden><div class="backup-card"><h3>为片库留一份副本</h3><p id="backupSummary"></p><div class="update-actions"><button id="makeBackup" class="primary-button">备份一次</button><button id="openBackupFolder" class="quiet-button">打开文件夹</button></div><details class="technical-details"><summary>保存位置</summary><p id="backupPath"></p></details></div></section>
+</dialog>
   <div id="detailOverlay" class="overlay" hidden>
     <article class="detail-panel" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
       <button id="closeDetail" class="close-button" aria-label="关闭">×</button>

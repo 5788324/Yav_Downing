@@ -36,6 +36,18 @@ def panel_value(soup: BeautifulSoup, *labels: str) -> str:
         return value.get_text(' ', strip=True) if value else ''
     return ''
 
+class JavdbSessionError(RuntimeError):
+    pass
+
+def checked_page(html):
+    soup = BeautifulSoup(html,'lxml')
+    title = soup.title.get_text(' ',strip=True) if soup.title else ''
+    if soup.select_one('#challenge-form,#challenge-running') or 'Just a moment' in title or title.startswith(('登入','登录','Login')):
+        raise JavdbSessionError('需要人工验证或登录，扫描已停止')
+    if 'Due to copyright restrictions, this movie is not available in your country.' in soup.get_text(' ',strip=True):
+        raise ValueError('该影片受版权地区限制')
+    return soup
+
 class JavdbSource:
     name='javdb'; headers={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36'}
     def __init__(self, session=None, delay=1.1):
@@ -53,6 +65,8 @@ class JavdbSource:
                 response.raise_for_status(); response.encoding = 'utf-8'; return response.text
             except requests.RequestException as exc:
                 last_error = exc
+                if getattr(getattr(exc,'response',None),'status_code',None) in {401,403}:
+                    raise JavdbSessionError('HTTP 403/401，需要检查人工验证或登录') from exc
                 if attempt < 2:
                     status = getattr(getattr(exc, 'response', None), 'status_code', None)
                     retry_after = getattr(getattr(exc, 'response', None), 'headers', {}).get('Retry-After', '')
@@ -61,25 +75,28 @@ class JavdbSource:
                     time.sleep(max(retry_after, 15.0 * (attempt + 1)) if status == 429 else attempt + 1)
         status = getattr(getattr(last_error, 'response', None), 'status_code', None)
         detail = f"HTTP {status}" if status else type(last_error).__name__ if last_error else '未知请求错误'
-        raise RuntimeError(f"JavDB 请求连续失败：{detail}")
+        raise JavdbSessionError(f"JavDB 请求连续失败：{detail}")
     def scan_series(self,url,*,start_page=1,stop_event:Event|None=None):
         current=url; page=1
         while current:
             if stop_event and stop_event.is_set(): return
-            soup=BeautifulSoup(self.request(current),'lxml'); base=f'{urlparse(current).scheme}://{urlparse(current).netloc}'
+            soup=checked_page(self.request(current)); base=f'{urlparse(current).scheme}://{urlparse(current).netloc}'
             links=[]
             for a in soup.select('a[href^="/v/"]'):
                 href=a.get('href','')
                 if '?' not in href and '#' not in href: links.append(urljoin(base,href))
+            if urlparse(current).hostname == 'javdb.com' and not links and not soup.select_one('.movie-list'):
+                raise JavdbSessionError('列表结构异常，请检查页面访问状态')
             if page >= start_page:
                 yield page,list(dict.fromkeys(links))
             next_link=soup.select_one('a.pagination-next[rel="next"]'); current=urljoin(base,next_link['href']) if next_link and next_link.get('href') else None; page+=1
     def _movie_soup(self, url):
         if url not in self._page_cache: self._page_cache[url] = self.request(url)
-        return BeautifulSoup(self._page_cache[url], 'lxml')
+        return checked_page(self._page_cache[url])
     def fetch_movie(self,url):
         soup=self._movie_soup(url); text=' '.join(soup.stripped_strings)
         title=(soup.select_one('meta[property="og:title"]') or soup.title); title=(title.get('content') if title and title.has_attr('content') else title.get_text(' ',strip=True) if title else '').split('|')[0].strip()
+        if not title: raise ValueError('页面未解析到影片名')
         cover=soup.select_one('meta[property="og:image"],img.video-cover,.video-cover img,.cover img'); cover=urljoin(url,(cover.get('content') or cover.get('src',''))) if cover else ''
         date=re.search(r'(?:發行日期|发行日期|日期)\s*[:：]?\s*(\d{4}[./-]\d{1,2}[./-]\d{1,2})',text)
         duration=re.search(r'(?:長度|长度|時長|时长)\s*[:：]?\s*(\d+)',text)
@@ -91,4 +108,5 @@ class JavdbSource:
         soup=self._movie_soup(url); out=[]
         for a in soup.select('a[href^="magnet:"]'):
             magnet=a.get('href',''); size=size_bytes(a.get_text(' ',strip=True)); out.append(SourceMagnet(magnet,size))
+        self._page_cache.pop(url, None)
         return list({m.magnet:m for m in out}.values())

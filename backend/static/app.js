@@ -1,3 +1,4 @@
+import { createLibraryTools } from './library-tools.js';
 import { monthlyUpdateReminder, updateReminderLine } from './update-reminder.js';
 import { reconcileScanStates } from './scan-state.js';
 
@@ -46,7 +47,7 @@ function displayDate(value) {
 
 function posterMarkup(movie, className = '') {
   if (movie.cover_src) {
-    return `<img class="${className}" src="${escapeHtml(movie.cover_src)}" alt="${escapeHtml(movie.title)}" loading="lazy" data-fallback-letter="${escapeHtml((movie.title || 'Y').slice(0, 1))}">`;
+    return `<img class="${className}" src="${escapeHtml(movie.cover_src)}${movie.cover_src.startsWith('/api/') ? `?v=${encodeURIComponent(movie.updated_at || '')}` : ''}" alt="${escapeHtml(movie.title)}" loading="lazy" data-fallback-letter="${escapeHtml((movie.title || 'Y').slice(0, 1))}">`;
   }
   return `<div class="poster-fallback ${className}"><span>${escapeHtml((movie.title || 'Y').slice(0, 1))}</span></div>`;
 }
@@ -58,12 +59,9 @@ window.posterFallback = (letter, extraClass = '') => {
   return node;
 };
 
-function sourcePills(counts = {}) {
-  const entries = Object.entries(counts);
-  if (!entries.length) return '<span class="source-pill"><span>暂无磁链</span></span>';
-  return entries.map(([source, count]) =>
-    `<span class="source-pill"><span>${escapeHtml(source)}</span><b>${count}</b></span>`
-  ).join('');
+function sourcePills(counts, total) {
+  const sources=Object.entries(counts).map(([source,count])=>`${source.toUpperCase()} ${count}`).join(' · ');
+  return `<span class="source-pill" title="${escapeHtml(sources)}">${total ? total+' 条磁链' : '待补全'}</span>`;
 }
 
 function movieCard(movie) {
@@ -74,7 +72,7 @@ function movieCard(movie) {
       <button class="poster-button" data-open="${movie.id}">
         <div class="poster-frame">
           ${posterMarkup(movie)}
-          <div class="source-pills">${sourcePills(movie.source_counts)}</div>
+          <div class="source-pills">${sourcePills(movie.source_counts,movie.magnet_count)}</div>
         </div>
         <div class="card-copy">
           <h4 class="card-title">${escapeHtml(movie.title)}</h4>
@@ -131,6 +129,8 @@ async function loadSeriesReminders() {
   if (!box) return;
   const panels = await Promise.allSettled(['javdb','jphoo','avfan'].map(source => request(`/api/sources/${source}`)));
   const rows = panels.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+  const dueCount = rows.filter(item => monthlyUpdateReminder(item)).length;
+  $('#reminderSummary').textContent = rows.length+' 个系列'+(dueCount ? ' · '+dueCount+' 项可更新' : '');
   box.innerHTML = rows.map(item => `<div class="series-update-row"><strong>${escapeHtml(item.name)} <small>· ${escapeHtml(item.source.toUpperCase())}</small></strong><span>上次更新：${escapeHtml(displayDate(item.last_scanned_at) || '尚未扫描')}</span><span class="${monthlyUpdateReminder(item) ? 'source-hint' : ''}">${escapeHtml(updateReminderLine(item))}</span></div>`).join('') + (panels.some(result => result.status === 'rejected') ? '<p>部分来源提醒读取失败，请刷新重试。</p>' : '');
 }
 
@@ -180,15 +180,16 @@ function renderMovies() {
   grid.innerHTML = items.map(movieCard).join('');
   $('#emptyState').hidden = items.length > 0;
   if (total === 0) {
-    $('#emptyState h3').textContent = '资料库为空';
-    $('#emptyState p').textContent = '可以创建空资料库，或使用 Yav V1 导入入口迁移现有资料。';
+    $('#emptyState h3').textContent = '没有找到符合条件的影片';
+    $('#emptyState p').textContent = '可以调整筛选条件，或点击显示全部影片。';
   }
   $('#pagination').hidden = total === 0;
-  $('#resultSummary').textContent = `当前筛选找到 ${total.toLocaleString('zh-CN')} 部影片`;
+  $('#resultSummary').textContent = `${total.toLocaleString('zh-CN')} 部`;
   $('#contentTitle').textContent = currentTitle();
   $('#prevPage').disabled = page <= 1;
   $('#nextPage').disabled = page >= pages;
   renderPageNumbers(page, pages);
+  libraryTools.afterRender();
 }
 
 function currentTitle() {
@@ -244,7 +245,7 @@ async function toggleFavorite(id, nextValue, button) {
 
 async function openDetail(id) {
   const requestId = ++movieDetailRequestId;
-  state.detailLastTrigger = document.activeElement;
+  if ($('#detailOverlay').hidden) state.detailLastTrigger = document.activeElement;
   $('#detailOverlay').hidden = false; document.body.style.overflow = 'hidden'; $('#closeDetail').focus();
   $('#detailContent').innerHTML = '<div style="padding:100px;text-align:center">正在读取影片资料…</div>';
   try { const movie = await request(`/api/movies/${id}`); if (requestId !== movieDetailRequestId) return; state.currentMovie = movie; renderDetail(movie); }
@@ -263,24 +264,26 @@ function renderDetail(movie) {
     <section class="detail-hero">
       <div>${posterMarkup(movie, 'detail-poster')}</div>
       <div class="detail-copy">
-        <div class="detail-kicker">PRIVATE LIBRARY ENTRY · #${movie.id}</div>
+        <div class="detail-kicker">影片资料</div>
         <h2 id="detailTitle">${escapeHtml(movie.title)}</h2>
         <div class="detail-facts">${facts.map(([label, value]) => `<div class="detail-fact"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`).join('')}</div>
         <div class="detail-actions">
-          <button class="primary-action" id="editMovie">编辑资料</button>
-          <button class="secondary-action ${movie.favorite ? 'is-active' : ''}" id="detailFavorite">${movie.favorite ? '♥ 已收藏' : '♡ 加入收藏'}</button>
+          <button class="text-button" id="editMovie">编辑资料</button>
+          <details class="detail-more"><summary>更多</summary><div id="detailCoverMenu" class="detail-menu"></div></details>
+          <button class="primary-action ${movie.favorite ? 'is-active' : ''}" id="detailFavorite">${movie.favorite ? '♥ 已收藏' : '♡ 加入收藏'}</button>
         </div>
       </div>
     </section>
     <section class="detail-body">
       <div class="magnet-heading">
-        <div><div class="content-kicker">MAGNET COLLECTION</div><h3>磁链收藏</h3></div>
-        <p>共 ${movie.magnets.length} 条唯一 BTIH，按文件大小排序</p>
+        <div><h3>磁链</h3></div>
+        <p>${movie.magnets.length} 条磁链</p>
       </div>
       ${temporaryLookupLinks(movie.title)}
       ${magnetList(movie.magnets)}
       ${editForm(movie)}
     </section>`;
+  libraryTools.afterDetail(movie);
 }
 
 function temporaryLookupLinks(title) {
@@ -288,10 +291,7 @@ function temporaryLookupLinks(title) {
     const url = site.search(title || '');
     return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">在 ${escapeHtml(site.name)} 查询</a>`;
   }).join('');
-  return `<aside class="temporary-lookups" aria-label="临时外部查询站点">
-    <div><strong>临时外部查询</strong><small>仅打开站内搜索，不会自动写入资料库</small></div>
-    <div class="temporary-lookup-links">${links}</div>
-  </aside>`;
+  return `<details class="temporary-lookups"><summary>去其他来源找找</summary><div class="temporary-lookup-links">${links}</div></details>`;
 }
 
 function magnetList(magnets) {
@@ -303,7 +303,7 @@ function magnetList(magnets) {
     return `<article class="magnet-row">
       <div class="magnet-sources">${sourceTags}</div>
       <div class="magnet-size">${formatSize(magnet.size_bytes)}</div>
-      <div class="magnet-hash" title="${escapeHtml(magnet.btih)}">BTIH · ${escapeHtml(magnet.btih.slice(0, 12))}…${escapeHtml(magnet.btih.slice(-8))}</div>
+
       <div class="magnet-actions">
         ${openLinks}
         <button class="copy-magnet" data-copy="${escapeHtml(magnet.magnet)}">复制磁链</button>
@@ -321,7 +321,7 @@ function editForm(movie) {
     <label>日期<input name="release_date" type="date" value="${escapeHtml(movie.release_date || '')}"></label>
     <label>时长（分钟）<input name="duration_minutes" type="number" min="0" max="1440" value="${movie.duration_minutes ?? ''}"></label>
     <label class="wide">演员<input name="actresses" value="${escapeHtml((movie.actresses || []).join('、'))}" placeholder="多人请用顿号或逗号分隔"></label>
-    <div class="save-row"><button type="button" class="cancel-edit" id="cancelEditMovie">取消</button><button type="submit">保存手动修改</button></div>
+    <div class="save-row"><button type="button" class="cancel-edit" id="cancelEditMovie">取消</button><button type="submit">保存修改</button></div>
   </form>`;
 }
 
@@ -342,7 +342,7 @@ async function saveEdit(form) {
   }
 }
 
-function closeDetail() { movieDetailRequestId += 1; $('#detailOverlay').hidden = true; document.body.style.overflow = ''; state.currentMovie = null; state.detailLastTrigger?.focus(); }
+function closeDetail() { const id=state.currentMovie?.id; movieDetailRequestId += 1; $('#detailOverlay').hidden = true; document.body.style.overflow = ''; state.currentMovie = null; const target=$(`[data-open="${id}"]`) || state.detailLastTrigger; target?.focus({preventScroll:true}); }
 
 function clearFilters() {
   state.quick = 'all';
@@ -413,10 +413,6 @@ function bindEvents() {
     loadMovies({ scroll: true });
   }));
 
-  $$('.category-link').forEach(button => button.addEventListener('click', () => {
-    $(`#${button.dataset.focus}Filter`).focus();
-    $('.filter-panel').scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }));
 
   $$('.view-btn').forEach(button => {
     button.classList.toggle('is-active', button.dataset.view === state.view);
@@ -475,11 +471,16 @@ document.addEventListener('keydown', event => { if (event.key !== 'Escape') retu
   });
 }
 
+const libraryTools = createLibraryTools({state,request,escapeHtml,showToast,loadMovies,loadFilters,buildQuery,openDetail,closeDetail,renderDetail,magnetList,openSources,clearFilters});
+
 async function init() {
   bindEvents();
+  libraryTools.init();
   try {
     await loadFilters();
+    const savedScroll = libraryTools.restore();
     await loadMovies();
+    if (savedScroll) window.scrollTo(0,savedScroll);
   } catch (error) {
     showToast(error.message);
   }
@@ -502,37 +503,43 @@ function sourcePayload(form, source) {
     profile_dir: '',
   };
 }
-function sourceButtons(item, session = {}) {
-  const state = item.scan_status || (item.enabled ? 'idle' : 'disabled');
-  const locked = ['starting', 'running', 'stopping'].includes(state);
-  const needsLogin = ['jphoo','avfan'].includes(item.source) && !(session.status === 'ready' && session.login === 'ready' && session.window_open === true);
-  const disabled = !item.enabled || locked || needsLogin;
-  if (state === 'starting') return '<button disabled>正在启动…</button>';
-  if (state === 'running') return `<button data-source="${item.source}" data-stop="${item.id}">停止扫描</button>`;
-  if (state === 'stopping') return '<button disabled>正在停止…</button>';
-  if (!item.enabled) return `<button data-source="${item.source}" data-toggle="${item.id}" data-enabled="true">启用</button><button data-source="${item.source}" data-edit="${item.id}">编辑</button><button data-source="${item.source}" data-delete="${item.id}">删除</button>`;
-  if (state === 'login_required' || needsLogin) return `<span class="source-hint">请先打开并验证 ${item.source.toUpperCase()} 会话</span><button data-source="${item.source}" data-edit="${item.id}">编辑</button><button data-source="${item.source}" data-delete="${item.id}">删除</button>`;
-  return `<button data-source="${item.source}" data-scan="${item.id}" ${disabled ? 'disabled' : ''}>从第 1 页重新扫描</button><button data-source="${item.source}" data-continue="${item.id}" ${disabled ? 'disabled' : ''}>继续扫描</button><button data-source="${item.source}" data-edit="${item.id}" ${locked ? 'disabled' : ''}>编辑</button><button data-source="${item.source}" data-toggle="${item.id}" data-enabled="false" ${locked ? 'disabled' : ''}>停用</button><button data-source="${item.source}" data-delete="${item.id}" ${locked ? 'disabled' : ''}>删除</button>`;
+function sourceButtons(item, session) {
+  const state=item.scan_status;
+  if (state==='starting' || state==='stopping') return `<span class="source-hint">${state==='starting'?'准备更新':'正在停止'}</span>`;
+  if (state==='running') return `<button data-source="${item.source}" data-stop="${item.id}">停止更新</button>`;
+  const needsLogin=item.source!=='javdb' && session.status!=='ready';
+  const update=item.enabled && !needsLogin ? `<button data-source="${item.source}" data-scan="${item.id}">更新</button>` : '';
+  const hint=needsLogin && item.enabled ? '<span class="source-hint">先登录并验证</span>' : '';
+  return `${update}${hint}<details class="source-menu"><summary>设置</summary><div>
+    ${item.enabled&&!needsLogin ? `<button data-source="${item.source}" data-continue="${item.id}">接着上次更新</button>` : ''}
+    <button data-source="${item.source}" data-edit="${item.id}">编辑系列</button>
+    <button data-source="${item.source}" data-toggle="${item.id}" data-enabled="${!item.enabled}">${item.enabled?'停用':'启用'}</button>
+    <button data-source="${item.source}" data-delete="${item.id}">移除系列</button>
+  </div></details>`;
 }
-function sourceCard(item, session = {}, appProfile = '') {
-  const stats = `页 ${item.current_page || item.last_completed_page || 0} · 发现 ${item.discovered || 0} · 处理 ${item.processed_count || 0} · 新磁链 ${item.new_magnets || 0} · 失败 ${item.failures || 0}`;
-  const legacyProfile = item.source === 'jphoo' && item.profile_dir && item.profile_dir !== appProfile ? '<br><small class="source-hint">旧版系列 Profile 已不再使用；当前统一使用上方应用 Profile。</small>' : '';
-  return `<article class="source-card" data-source-card="${item.source}-${item.id}"><div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.url)}</p><small>${item.enabled ? '已启用' : '已停用'} · ${stats}${item.last_error ? ` · ${escapeHtml(item.last_error)}` : ''}</small>${legacyProfile}<p>上次完整扫描：${escapeHtml(item.last_scanned_at || '尚未扫描')}</p><p class="source-hint">${escapeHtml(updateReminderLine(item))}</p></div><div class="source-actions">${sourceButtons(item, session)}</div></article>`;
+function sourceCard(item, session) {
+  return `<article class="source-card" data-source-card="${item.source}-${item.id}"><div class="source-card-main"><strong>${escapeHtml(item.name)}</strong><span>${item.enabled ? '上次更新：'+(displayDate(item.last_scanned_at)||'还没有更新') : '已停用'}</span><p class="source-hint">${escapeHtml(updateReminderLine(item))}</p></div><div class="source-actions">${sourceButtons(item,session)}</div><details class="technical-details"><summary>查看来源信息</summary><p>${escapeHtml(item.url)}</p>${item.last_error?`<p>${escapeHtml(item.last_error)}</p>`:''}</details></article>`;
 }
-function loginDisplayState(login = {}) { const status=String(login.status || ''); const stable=String(login.login || ''); return ['opening','checking','closing'].includes(status) ? status : (status || stable || 'unknown'); }
+function loginDisplayState(login) {
+  const labels={opening:'正在打开',checking:'正在检查',closing:'正在关闭',ready:'可以更新',window_open:'等待验证',closed:'尚未打开',login_required:'需要登录',unknown:'等待验证',scanning:'正在更新'};
+  return labels[login.status || login.login] || '尚未打开';
+}
+function scanDescription(scan) {
+  if (['running','starting','stopping'].includes(scan.status)) return `${scan.series_name} · 第 ${scan.current_page||scan.page||1} 页 · 已整理 ${scan.processed_count||scan.processed||0} 部`;
+  return '';
+}
 function sourceForm(source, label) {
-  return `<form class="source-form" data-source-form="${source}"><h3 data-form-title>添加 ${label} 系列</h3><label><span>系列名称</span><input name="name" placeholder="例如：Vixen" required></label><label><span>系列网址</span><input name="url" type="url" placeholder="${label} 系列网址" required></label><label class="source-check"><input name="enabled" type="checkbox" checked> 启用此系列</label><div class="source-form-actions"><button type="submit">保存系列</button><button type="button" data-cancel-edit hidden>取消编辑</button></div></form>`;
+  return `<details class="source-add"><summary>添加系列</summary><form class="source-form" data-source-form="${source}"><h3 data-form-title>添加 ${label} 系列</h3><label><span>系列名称</span><input name="name" placeholder="例如：Vixen" required></label><label><span>系列网址</span><input name="url" type="url" placeholder="${label} 系列网址" required></label><label class="source-check"><input name="enabled" type="checkbox" checked> 启用此系列</label><div class="source-form-actions"><button type="submit">保存系列</button><button type="button" data-cancel-edit hidden>取消编辑</button></div></form></details>`;
 }
 async function sourcePanel(source, label) {
   const [rows, scan, login] = await Promise.all([request(`/api/sources/${source}`), request(`/api/sources/${source}/scan`), ['jphoo','avfan'].includes(source) ? request(`/api/sources/${source}/login`) : Promise.resolve({})]);
   sourceScanStates[source] = ['starting','running','stopping'].includes(scan.status);
   const loginState = loginDisplayState(login);
   const currentRows = rows.map(item => (item.id === scan.series_id && ['starting','running','stopping'].includes(scan.status)) ? {...item, ...scan, scan_status: scan.status} : item);
-  const loginCard = source === 'jphoo' ? `<section class="source-status-card"><h3>JPHOO 会话：<span data-login-state>${escapeHtml(loginState)}</span></h3><p>统一 Profile：${escapeHtml(login.profile_dir || '正在读取')}<br>目标域名：${escapeHtml(login.target_origin || '请选择系列')}<br>浏览器会话：${login.window_open ? '已打开' : '未打开'} · 最后验证：${escapeHtml(login.last_verified_at || '未验证')}</p><label>登录目标<select id="jphooLoginSeries">${currentRows.filter(item => item.enabled).map(item => `<option value="${item.id}">${escapeHtml(item.name)} · ${escapeHtml(item.url)}</option>`).join('') || '<option value="">请先添加并启用系列</option>'}</select></label><button data-login="open">打开/恢复会话</button><button data-login="check" ${login.window_open ? '' : 'disabled'}>验证登录</button><button data-login="close" ${login.window_open ? '' : 'disabled'}>关闭会话</button></section>` : '';
-  const scanText = `当前扫描：${escapeHtml(scan.series_name || '无')} · 来源：${escapeHtml(scan.source || source)} · 状态：${escapeHtml(scan.status || 'idle')} · 当前页：${scan.current_page || scan.page || 0} · 发现：${scan.discovered || 0} · 处理：${scan.processed_count || scan.processed || 0} · 新磁链：${scan.new_magnets || 0} · 失败：${scan.failures || 0}`;
-  const avfanCard = source === 'avfan' ? `<section class="source-status-card"><h3>AVFan 会话：<span data-avfan-login>${escapeHtml(loginState)}</span></h3><p>在独立 Edge 窗口手动完成验证后，点击“验证页面”。支持系列和厂商网址。</p><select id="avfanLoginSeries" aria-label="AVFan 验证目标">${currentRows.map(row=>`<option value="${row.id}">${escapeHtml(row.name)}</option>`).join('')}</select>${['open','check','close'].map((action,i)=>`<button data-avfan-login="${action}">${['打开会话','验证页面','关闭会话'][i]}</button>`).join('')}<p>${escapeHtml(login.error || '')}</p></section>` : '';
-  return `<section class="source-section" data-source-section="${source}">${source === 'javdb' ? '<h2 id="sourcesTitle">来源管理</h2>' : ''}<h3>${label}</h3>${loginCard}${avfanCard}<section class="source-status-card" data-scan-status="${source}">${scanText}</section>${sourceForm(source,label)}<div class="source-cards">${currentRows.map(item => sourceCard(item, login, login.profile_dir || '')).join('') || `<p class="source-empty">尚未配置 ${label} 系列。</p>`}</div></section>`;
+  const loginCard=source==='javdb' ? '' : `<section class="session-card"><div><strong>登录浏览器</strong><span ${source==='jphoo'?'data-login-state':'data-avfan-login'}>${escapeHtml(loginState)}</span></div><p>在独立窗口登录后，回来点“检查登录”。</p><select id="${source==='jphoo'?'jphooLoginSeries':'avfanLoginSeries'}" aria-label="登录目标">${currentRows.filter(row=>row.enabled).map(row=>`<option value="${row.id}">${escapeHtml(row.name)}</option>`).join('')}</select><div class="session-actions">${['open','check','close'].map((action,index)=>`<button ${source==='jphoo'?'data-login':'data-avfan-login'}="${action}">${['打开登录窗口','检查登录','关闭窗口'][index]}</button>`).join('')}</div></section>`;
+  return `<section class="source-section" data-source-section="${source}">${source==='javdb'?'<h2 id="sourcesTitle">来源设置</h2>':''}<h3>${label}</h3>${loginCard}<p class="source-progress" data-scan-status="${source}">${escapeHtml(scanDescription(scan))}</p><div class="source-cards">${currentRows.map(item=>sourceCard(item,login)).join('')||'<p>还没有添加系列。</p>'}</div>${sourceForm(source,label)}</section>`;
 }
+
 function sourcePanelError(label, error) { return `<section class="source-section"><h3>${label}</h3><p class="source-error">${escapeHtml(error.message || '来源状态读取失败')}</p></section>`; }
 async function renderSources() {
   const content = $('#sourceContent'); content.innerHTML = '<p class="source-loading">正在读取来源配置…</p>';
@@ -548,7 +555,7 @@ async function refreshSourceStatuses() {
   sourceRefreshInFlight = true;
   try {
     const scans = {};
-    for (const source of ['javdb','jphoo','avfan']) { const scan = await request(`/api/sources/${source}/scan`); scans[source] = scan; const box = $(`[data-scan-status="${source}"]`); if (box) box.textContent = `当前扫描：${scan.series_name || '无'} · 来源：${scan.source || source} · 状态：${scan.status || 'idle'} · 当前页：${scan.current_page || scan.page || 0} · 发现：${scan.discovered || 0} · 处理：${scan.processed_count || scan.processed || 0} · 新磁链：${scan.new_magnets || 0} · 失败：${scan.failures || 0}`; }
+    for (const source of ['javdb','jphoo','avfan']) { const scan = await request(`/api/sources/${source}/scan`); scans[source] = scan; const box = $(`[data-scan-status="${source}"]`); if (box) box.textContent = scanDescription(scan); }
     const login = !$('#sourceOverlay').hidden ? await request('/api/sources/jphoo/login') : null;
     const avfanLogin = !$('#sourceOverlay').hidden ? await request('/api/sources/avfan/login') : null;
     sourceStatusFailures = 0;
@@ -587,18 +594,17 @@ $('#sourceContent').addEventListener('click', event => {
   const source = button.dataset.source;
   if (button.dataset.avfanLogin) return sourceAction(button, async()=>{await request(`/api/sources/avfan/login/${button.dataset.avfanLogin}`,{method:'POST',body:JSON.stringify({series_id:Number($('#avfanLoginSeries')?.value)})});ensureSourcePolling();});
 if (button.dataset.login) { const series=$('#jphooLoginSeries'); const payload=button.dataset.login === 'open' ? {series_id:Number(series?.value || 0)} : {}; return sourceAction(button, async () => { await request(`/api/sources/jphoo/login/${button.dataset.login}`, {method:'POST',body:JSON.stringify(payload)}); ensureSourcePolling(); }); }
-  if (button.hasAttribute('data-cancel-edit')) { const form=button.closest('form'); form.reset(); delete form.dataset.editId; button.hidden=true; form.querySelector('[data-form-title]').textContent=`添加 ${form.dataset.sourceForm === 'jphoo' ? 'JPHOO' : 'JavDB'} 系列`; return; }
+  if (button.hasAttribute('data-cancel-edit')) { const form=button.closest('form'); form.reset(); delete form.dataset.editId; button.hidden=true; form.querySelector('[data-form-title]').textContent=`添加 ${({javdb:'JavDB',jphoo:'JPHOO',avfan:'AVFan'})[form.dataset.sourceForm]} 系列`; return; }
   if (!source) return;
-  if (button.dataset.edit) return request(`/api/sources/${source}`).then(rows => { const item=rows.find(row=>String(row.id)===button.dataset.edit); const form=$(`[data-source-form="${source}"]`); form.dataset.editId=item.id; form.name.value=item.name; form.url.value=item.url; form.enabled.checked=Boolean(item.enabled); if(form.profile_dir) form.profile_dir.value=item.profile_dir||''; form.querySelector('[data-form-title]').textContent=`编辑 ${item.name}`; form.querySelector('[data-cancel-edit]').hidden=false; form.scrollIntoView({behavior:'smooth',block:'center'}); }).catch(error => showToast(error.message));
+  if (button.dataset.edit) return request(`/api/sources/${source}`).then(rows => { const item=rows.find(row=>String(row.id)===button.dataset.edit); const form=$(`[data-source-form="${source}"]`); form.dataset.editId=item.id; form.name.value=item.name; form.url.value=item.url; form.enabled.checked=Boolean(item.enabled); if(form.profile_dir) form.profile_dir.value=item.profile_dir||''; form.querySelector('[data-form-title]').textContent=`编辑 ${item.name}`; form.querySelector('[data-cancel-edit]').hidden=false; form.closest('details').open=true; form.scrollIntoView({behavior:'smooth',block:'center'}); }).catch(error => showToast(error.message));
   if (button.dataset.delete) {
-    if (!window.confirm('确认删除这个来源系列配置吗？')) return;
+    if (!window.confirm('确认删除这个系列配置及其扫描记录吗？影片和磁链会保留。')) return;
     return sourceAction(button, async () => { await request(`/api/sources/${source}/${button.dataset.delete}`,{method:'DELETE'}); showToast('已删除来源系列'); });
   }
   if (button.dataset.toggle) return sourceAction(button, async () => { const item=(await request(`/api/sources/${source}`)).find(row=>String(row.id)===button.dataset.toggle); await request(`/api/sources/${source}`,{method:'POST',body:JSON.stringify({series_id:item.id,name:item.name,url:item.url,enabled:button.dataset.enabled==='true',profile_dir:item.profile_dir||''})}); });
   const action = button.dataset.scan ? 'scan' : button.dataset.continue ? 'continue' : button.dataset.stop ? 'stop' : '';
   const id = button.dataset.scan || button.dataset.continue || button.dataset.stop;
   if (action) {
-    if (action === 'scan' && !window.confirm('将从第一页重新扫描该系列。现有资料不会删除，但会重新请求全部页面。是否继续？')) return;
     sourceAction(button, async () => { await request(`/api/sources/${source}/${id}/${action}`, {method:'POST', body:'{}'}); if (action !== 'stop') sourceScanStates[source] = true; ensureSourcePolling(); });
   }
 });

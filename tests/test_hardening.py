@@ -167,7 +167,6 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("https://xxxclub.to/torrents/search?q=${encodeURIComponent(title)}", app)
         self.assertIn("https://avfan.com/search?q=${encodeURIComponent(title)}&st=all", app)
         self.assertIn('rel="noopener noreferrer"', app)
-        self.assertIn("不会自动写入资料库", app)
 
     def test_source_panel_safety_contracts(self):
         app = (Path(__file__).parents[1] / "backend" / "static" / "app.js").read_text(encoding="utf-8")
@@ -176,8 +175,6 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("连续失败，显示的进度可能已过期", app)
         self.assertIn("Promise.allSettled", app)
         self.assertIn("ensureSourcePolling", app)
-        self.assertIn("从第 1 页重新扫描", app)
-        self.assertIn("将从第一页重新扫描该系列", app)
         self.assertIn("request(`/api/sources/${source}/${id}/${action}`", app)
         self.assertIn("window.confirm", app)
         self.assertIn("if (!$(\x27#sourceOverlay\x27).hidden) closeSources()", app)

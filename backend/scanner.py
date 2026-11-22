@@ -1,17 +1,19 @@
 """本地单线程来源扫描器：JavDB 与 JPHOO 共用简单进度模型。"""
 from __future__ import annotations
 import json
+import sqlite3
+import time
 from pathlib import Path
 from queue import Queue
 from threading import Event, Thread, Lock, RLock
 from urllib.parse import urlparse
-from .sources.javdb import JavdbSource
+from .sources.javdb import JavdbSource, JavdbSessionError
 
 _STAT_KEYS = ("discovered", "processed", "new_movies", "new_magnets", "failures", "matched_current", "attached_other_movies", "unmatched_candidates", "retried_failures", "resolved_failures")
 
 class BaseScanner:
     source_name = ""
-    def __init__(self, database): self.db = database; self.stop_event = Event()
+    def __init__(self, database): self.db = database; self.stop_event = Event(); self.retry_only = False
     def stop(self): self.stop_event.set()
     def _begin(self, series_id, from_start):
         with self.db.connect() as db:
@@ -25,6 +27,7 @@ class BaseScanner:
             else:
                 page = max(1, series["last_completed_page"] + 1)
             run_id = db.execute("INSERT INTO scan_runs(series_id,status,started_at) VALUES(?,?,?)", (series_id, "running", self.db.now())).lastrowid
+        self.run_id = run_id
         return series, page, run_id
     def _save_progress(self, series_id, run_id, page, stats, last_error="", page_completed=False):
         with self.db.connect() as db:
@@ -35,8 +38,28 @@ class BaseScanner:
     def _finish(self, series_id, run_id, page, stats, status, error=""):
         with self.db.connect() as db:
             db.execute("""UPDATE scan_runs SET status=?,current_page=?,discovered=?,processed_count=?,new_movies=?,new_magnets=?,failures=?,matched_current=?,attached_other_movies=?,unmatched_candidates=?,last_error=?,message=?,finished_at=? WHERE id=?""", (status, page, stats["discovered"], stats["processed"], stats["new_movies"], stats["new_magnets"], stats["failures"], stats["matched_current"], stats["attached_other_movies"], stats["unmatched_candidates"], error[:200], error[:200], self.db.now(), run_id))
-            if status == "completed": db.execute("UPDATE source_series SET last_scanned_at=? WHERE id=?", (self.db.now(), series_id))
+            if status == "completed" and not self.retry_only: db.execute("UPDATE source_series SET last_scanned_at=? WHERE id=?", (self.db.now(), series_id))
     def _stats(self): return {key: 0 for key in _STAT_KEYS}
+    def _process_tracked(self, source, series, series_id, url, page, stats):
+        before = dict(stats)
+        for attempt in range(3):
+            try:
+                self._process_url(source, series, series_id, url, page, stats)
+                break
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower() or attempt == 2: raise
+                stats["discovered"] = before["discovered"]
+                stats["processed"] = before["processed"]
+                time.sleep(0.2 * (attempt + 1))
+        for attempt in range(3):
+            try:
+                self.db.record_run_movie(self.run_id,self.source_name,url,
+                    stats["new_movies"] > before["new_movies"],stats["new_magnets"]-before["new_magnets"])
+                break
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower() or attempt == 2: raise
+                time.sleep(0.2 * (attempt + 1))
+
     def _record_failure(self, series_id, url, page, exc):
         self.db.record_scan_failure(self.source_name, series_id, url, page, str(exc))
     def _retry_unresolved(self, series_id, process):
@@ -47,11 +70,11 @@ class BaseScanner:
 class JavdbScanner(BaseScanner):
     source_name = "javdb"
     source_factory = None
-    fatal_errors = ()
+    fatal_errors = (JavdbSessionError,)
     require_successful_page = False
     def _process_url(self, source, series, series_id, url, page, stats):
-        stats["discovered"] += 1
         data = source.fetch_movie(url)
+        stats["discovered"] += 1
         existed = self.db.movie_import_exists(data.title, self.source_name, url)
         movie = self.db.add_or_update_movie(data.title, studio=data.studio, series=data.series or (series["name"] if '/makers/' not in series["url"] else ''), release_date=data.release_date, duration_minutes=data.duration_minutes, cover_url=data.cover_url, actresses=data.actresses, source=self.source_name, source_url=url)
         stats["new_movies"] += int(not existed)
@@ -67,19 +90,19 @@ class JavdbScanner(BaseScanner):
                 if self.stop_event.is_set(): break
                 stats["retried_failures"] += 1
                 try:
-                    self._process_url(source, series, series_id, failure["source_url"], failure["page"], stats)
+                    self._process_tracked(source, series, series_id, failure["source_url"], failure["page"], stats)
                     stats["resolved_failures"] += 1
                 except Exception as exc:
                     if isinstance(exc, self.fatal_errors): raise
                     stats["failures"] += 1; error = str(exc); self._record_failure(series_id, failure["source_url"], failure["page"], exc)
                     if self.require_successful_page: raise
-            if not self.stop_event.is_set():
-                for page, urls in source.scan_series(series["url"], start_page=page, stop_event=self.stop_event):
+            if not self.stop_event.is_set() and not self.retry_only:
+                for page, urls in ([] if self.retry_only else source.scan_series(series["url"], start_page=page, stop_event=self.stop_event)):
                     page_completed = True
                     for url in urls:
                         if self.stop_event.is_set(): page_completed = False; break
                         try:
-                            self._process_url(source, series, series_id, url, page, stats)
+                            self._process_tracked(source, series, series_id, url, page, stats)
                         except Exception as exc:
                             if isinstance(exc, self.fatal_errors): raise
                             if self.require_successful_page: page_completed = False
@@ -117,15 +140,15 @@ class JphooScanner(BaseScanner):
                 if self.stop_event.is_set(): break
                 stats["retried_failures"] += 1
                 try:
-                    self._process_url(source, series, series_id, failure["source_url"], failure["page"], stats); stats["resolved_failures"] += 1
+                    self._process_tracked(source, series, series_id, failure["source_url"], failure["page"], stats); stats["resolved_failures"] += 1
                 except LoginRequired: raise
                 except Exception as exc: stats["failures"] += 1; error = str(exc); self._record_failure(series_id, failure["source_url"], failure["page"], exc)
-            if not self.stop_event.is_set():
-                for page, urls in source.scan_series(series["url"], start_page=page, stop_event=self.stop_event):
+            if not self.stop_event.is_set() and not self.retry_only:
+                for page, urls in ([] if self.retry_only else source.scan_series(series["url"], start_page=page, stop_event=self.stop_event)):
                     page_completed = True
                     for url in urls:
                         if self.stop_event.is_set(): page_completed = False; break
-                        try: self._process_url(source, series, series_id, url, page, stats)
+                        try: self._process_tracked(source, series, series_id, url, page, stats)
                         except LoginRequired: raise
                         except Exception as exc: stats["failures"] += 1; error = str(exc); self._record_failure(series_id, url, page, exc)
                     self._save_progress(series_id, run_id, page, stats, error, page_completed)
@@ -143,7 +166,7 @@ class ScanManager:
         self.database, self.scanner, self.thread, self.result, self.series_id = database, None, None, None, None
         self.lock = Lock()
     def make_scanner(self): return self.scanner_class(self.database)
-    def start(self, series_id, from_start=False):
+    def start(self, series_id, from_start=False, retry_only=False):
         with self.lock:
             if self.thread and self.thread.is_alive(): raise ValueError("该来源已有扫描正在运行")
             series = self.database.get_source_series(series_id, self.source_name)
@@ -152,6 +175,7 @@ class ScanManager:
             self.series_id, self.scanner = series_id, self.make_scanner()
             self.result = {"status":"starting", "series_id":series_id, "series_name":series["name"], "source":self.source_name}
             scanner = self.scanner
+            scanner.retry_only = retry_only
             def worker():
                 try: result = scanner.run(series_id, from_start)
                 except Exception as exc: result = {"status":"failed", "series_id":series_id, "source":self.source_name, "message":str(exc), "running":False}
@@ -259,7 +283,7 @@ class JphooSessionManager:
         self._post("close")
         return self.status()
 
-    def start(self, series_id, from_start=False):
+    def start(self, series_id, from_start=False, retry_only=False):
         series_id = int(series_id)
         series = self._series(series_id)
         with self.lock:
@@ -271,7 +295,7 @@ class JphooSessionManager:
             self.series_id = series_id
             self.scan_stop_requested.clear()
             self.result.update(status="starting", series_id=series_id, series_name=series["name"], source=self.source_name, scanning=True)
-        self._post("scan", series_id=series_id, from_start=from_start)
+        self._post("scan", series_id=series_id, from_start=from_start, retry_only=retry_only)
         return self.status()
     def stop(self, series_id=None):
         snapshot = self._snapshot()
@@ -388,6 +412,7 @@ class JphooSessionManager:
                     if aborted == "shutdown": return
                     if aborted: self.scanner = None; continue
                     self._set(status="running", scanning=True, series_id=series["id"], series_name=series["name"], source=self.source_name)
+                    self.scanner.retry_only = payload.get("retry_only",False)
                     result = self.scanner.run(series["id"], payload["from_start"])
                     self.scanner = None
                     if self.close_after_scan.is_set() or self.shutdown_requested.is_set():

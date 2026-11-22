@@ -14,6 +14,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from . import library_api
+from .library_actions import UpdateQueue
 from .db import LibraryDatabase
 from .scanner import ScanManager, JphooSessionManager
 from .avfan_session import AvfanSession
@@ -78,6 +80,7 @@ class ApplicationRuntime:
 
     def graceful_shutdown(self, reason):
         try:
+            self._shutdown_component(getattr(self, 'update_queue', None), '更新队列', 35)
             self._shutdown_component(getattr(self, 'avfan_session', None), 'AVFan 会话', 35)
             self._shutdown_component(self.scans, "JavDB 扫描", 10)
             self._shutdown_component(self.jphoo_session, "JPHOO 会话", 15)
@@ -90,6 +93,7 @@ STATIC_DIR = Path(__file__).with_name("static")
 
 class Handler(BaseHTTPRequestHandler):
     avfan_session = None
+    updates = None
     database: LibraryDatabase | None = None
     scans: ScanManager | None = None
     jphoo_scans: JphooSessionManager | None = None
@@ -107,6 +111,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _read_json(self):
         length = int(self.headers.get("Content-Length", "0") or 0)
+        if length > 12*1024*1024 or length < 0: raise ValueError('请求内容过大')
         if not length:
             return {}
         try:
@@ -132,6 +137,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
         query = parse_qs(parsed.query)
+        if library_api.get(self,path,query): return
         if path.startswith('/api/sources/avfan'):
             if path == '/api/sources/avfan': self._json(self.database.list_source_series('avfan'))
             elif path == '/api/sources/avfan/scan': self._json(self.avfan_session.status() if self.avfan_session else {'status':'idle','running':False})
@@ -157,6 +163,7 @@ class Handler(BaseHTTPRequestHandler):
                     source=query.get("source", [""])[0],
                     page=query.get("page", [1])[0],
                     page_size=query.get("page_size", [36])[0],
+                    **library_api.extra_filters(query),
                 )
                 self._json(result)
             except (ValueError, TypeError) as exc:
@@ -238,10 +245,15 @@ class Handler(BaseHTTPRequestHandler):
         source = urlparse(self.path).path.split("/")[3]
         series_id = int(match.group(1))
         manager = self.scans if source == "javdb" else self.avfan_session if source == 'avfan' else self.jphoo_scans
-        if (manager and manager.is_running_series(series_id)) or self.database.is_source_series_scanning(series_id, source):
+        if (self.updates and self.updates.reserved(series_id)) or (manager and manager.is_running_series(series_id)) or self.database.is_source_series_scanning(series_id, source):
             self._json({"error": "该系列正在扫描，请先停止扫描。"}, 409)
             return
-        if not self.database.delete_source_series(series_id, source):
+        try:
+            deleted = self.database.delete_source_series(series_id, source)
+        except ValueError as exc:
+            self._json({"error":str(exc)},409)
+            return
+        if not deleted:
             self._json({"error": "来源系列不存在或来源不匹配"}, 404)
             return
         self._json({"deleted": True})
@@ -250,11 +262,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         assert self.database is not None
         path = urlparse(self.path).path
+        if library_api.post(self,path): return
         if path.startswith('/api/sources/avfan'):
             try:
                 if not self.avfan_session: raise ValueError('AVFan 会话未初始化')
                 if path == '/api/sources/avfan':
                     payload = self._source_payload(self._read_json(), 'avfan')
+                    if self.updates and payload.get('series_id') and self.updates.reserved(int(payload['series_id'])): raise ValueError('该系列在更新队列中，请先停止队列')
                     from .sources.avfan import validate_url
                     validate_url(payload['url'])
                     if payload.get('series_id') and self.avfan_session.is_running_series(payload['series_id']): raise ValueError('该系列正在扫描')
@@ -264,6 +278,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(self.avfan_session.action(path.split('/')[-1],payload.get('series_id')),202)
                 elif re.fullmatch(r'/api/sources/avfan/\d+/(scan|continue|stop)',path):
                     sid, action = int(path.split('/')[-2]), path.split('/')[-1]
+                    if action != 'stop' and self.updates and self.updates.running(): raise ValueError('请先停止更新队列')
                     self._json(self.avfan_session.stop(sid) if action == 'stop' else self.avfan_session.start(sid,action=='scan'),202)
                 else: self.send_error(404)
             except (ValueError, TypeError) as exc: self._json({'error':str(exc)},409)
@@ -294,6 +309,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 if not self.scans: raise ValueError("扫描器未初始化")
                 action,series_id=action_match.group(2),int(action_match.group(1))
+                if action != "stop" and self.updates and self.updates.running(): raise ValueError("请先停止更新队列")
                 result=self.scans.stop(series_id) if action == "stop" else self.scans.start(series_id, action == "scan")
                 self._json(result, 202)
             except (ValueError, TypeError) as exc:
@@ -316,6 +332,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 if not self.jphoo_scans: raise ValueError("JPHOO 扫描器未初始化")
                 action,series_id=jphoo_action.group(2),int(jphoo_action.group(1))
+                if action != "stop" and self.updates and self.updates.running(): raise ValueError("请先停止更新队列")
                 self._json(self.jphoo_scans.stop(series_id) if action == "stop" else self.jphoo_scans.start(series_id, action == "scan"), 202)
             except (ValueError, TypeError) as exc:
                 self._json({"error":str(exc)}, 409 if action == "stop" and "不是当前" in str(exc) else 400)
@@ -324,6 +341,7 @@ class Handler(BaseHTTPRequestHandler):
         if urlparse(self.path).path == "/api/sources/jphoo":
             try:
                 payload = self._source_payload(self._read_json(), "jphoo")
+                if self.updates and payload.get('series_id') and self.updates.reserved(int(payload['series_id'])): raise ValueError('该系列在更新队列中，请先停止队列')
                 if payload.get("series_id") and self.jphoo_scans and self.jphoo_scans.is_running_series(payload["series_id"]): raise ValueError("该系列正在扫描，不能修改网址或启用状态")
                 self._json({"id": self.database.save_source_series(**payload)}, 201)
             except (ValueError, TypeError) as exc:
@@ -333,6 +351,7 @@ class Handler(BaseHTTPRequestHandler):
         if urlparse(self.path).path == "/api/sources/javdb":
             try:
                 payload = self._source_payload(self._read_json(), "javdb")
+                if self.updates and payload.get('series_id') and self.updates.reserved(int(payload['series_id'])): raise ValueError('该系列在更新队列中，请先停止队列')
                 if payload.get("series_id") and self.scans and self.scans.is_running_series(payload["series_id"]): raise ValueError("该系列正在扫描，不能修改网址或启用状态")
                 self._json({"id": self.database.save_source_series(**payload)}, 201)
             except (ValueError, TypeError) as exc:
@@ -395,9 +414,11 @@ def main():
     Handler.avfan_session = AvfanSession(Handler.database, args.data_dir / 'browser-profile' / 'avfan')
     jphoo_session = JphooSessionManager(Handler.database, args.data_dir / "browser-profile" / "jphoo")
     Handler.jphoo_scans = Handler.jphoo_login = jphoo_session
+    Handler.updates = UpdateQueue(Handler.database,{"javdb":Handler.scans,"jphoo":jphoo_session,"avfan":Handler.avfan_session})
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     Handler.runtime = ApplicationRuntime(server, Handler.scans, jphoo_session, secrets.token_urlsafe(32), args.instance_id or None, logger)
     Handler.runtime.avfan_session = Handler.avfan_session
+    Handler.runtime.update_queue = Handler.updates
     write_runtime_state(args.data_dir, pid=os.getpid(), port=args.port, instance_id=Handler.runtime.instance_id, token=Handler.runtime.shutdown_token)
     url = f"http://127.0.0.1:{args.port}"
     print(f"Yav V2 已启动：{url}")
@@ -406,6 +427,7 @@ def main():
     try:
         server.serve_forever()
     finally:
+        Handler.updates.shutdown(timeout=35)
         Handler.avfan_session.shutdown(timeout=35)
         jphoo_session.shutdown(timeout=15)
         server.server_close()
