@@ -11,7 +11,13 @@
 <body>
 <div class="app-shell">
   <aside class="sidebar">
-    <div class="brand-block"><div class="brand-mark">Y</div><div><div class="brand-name">Yav</div><div class="brand-subtitle">私人影片图书馆</div></div></div>
+    <div class="brand-block">
+      <div class="brand-mark">Y</div>
+      <div>
+        <div class="brand-name">Yav</div>
+        <div class="brand-subtitle">私人影片图书馆</div>
+      </div>
+    </div>
     <nav class="nav-stack" aria-label="片库导航">
       <button class="nav-item is-active" data-quick="all" aria-current="page"><span class="nav-icon">▦</span><span>全部影片</span><strong id="navTotal">0</strong></button>
       <button class="nav-item" data-quick="favorite"><span class="nav-icon">♥</span><span>我的收藏</span><strong id="navFavorites">0</strong></button>
@@ -20,14 +26,23 @@
     </nav>
     <div class="sidebar-section library-navigation">
       <span class="section-kicker">整理片库</span>
-      <button id="openLibraryTools" class="category-link">更新资料库</button>
+      <button id="openLibraryTools" class="category-link"><span>更新资料库</span><span id="queueBadge" class="queue-badge" hidden></span></button>
       <button id="openSources" class="category-link">来源设置</button>
     </div>
-    <div class="sidebar-foot"><span class="local-badge">保存在这台电脑</span><button id="shutdownApp" type="button" aria-label="安全退出 Yav">退出应用</button></div>
+    <div class="sidebar-foot">
+      <span class="local-badge">保存在这台电脑</span>
+      <div class="sidebar-foot-actions">
+        <button id="toggleTheme" type="button" aria-label="切换外观主题">深色外观</button>
+        <button id="shutdownApp" type="button" aria-label="安全退出 Yav">退出应用</button>
+      </div>
+    </div>
   </aside>
   <main class="main-stage">
     <header class="topbar">
-      <div><h1>我的片库</h1><p class="library-counts"><span id="statMovies">0</span> 部影片 <span class="count-dot">·</span> <span id="statMagnets">0</span> 条磁链 <span class="count-dot">·</span> <span id="statFavorites">0</span> 部收藏</p></div>
+      <div>
+        <h1>我的片库</h1>
+        <p class="library-counts"><span id="statMovies">0</span> 部影片 <span class="count-dot">·</span> <span id="statMagnets">0</span> 条磁链 <span class="count-dot">·</span> <span id="statFavorites">0</span> 部收藏</p>
+      </div>
     </header>
     <section class="filter-panel" aria-label="查找影片">
       <div class="search-line">
@@ -47,30 +62,93 @@
           <label><span>发行日期从</span><input id="dateFrom" type="date"></label>
           <label><span>发行日期至</span><input id="dateTo" type="date"></label>
         </div>
-        <div class="filter-footer"><button id="clearFilters" class="text-button">清除筛选</button><button id="closeFilters" class="quiet-button">收起</button></div>
+        <div class="filter-footer">
+          <button id="clearFilters" class="text-button">清除筛选</button>
+          <button id="closeFilters" class="quiet-button">收起</button>
+        </div>
       </div>
     </section>
     <div id="activeFilters" class="active-filters"></div>
     <section class="content-head">
       <div class="collection-title"><h2 id="contentTitle">全部影片</h2><span id="resultSummary">正在读取…</span></div>
       <div class="collection-actions">
-        <select id="sortFilter" aria-label="排列顺序"><option value="">最新发行</option><option value="added">最近入库</option><option value="magnets">最近有新磁链</option><option value="title">影片名</option><option value="favorite">收藏优先</option></select>
-        <div class="view-switcher" aria-label="浏览方式"><button class="view-btn is-active" aria-pressed="true" data-view="gallery">海报墙</button><button class="view-btn" aria-pressed="false" data-view="shelf">收藏架</button><button class="view-btn" aria-pressed="false" data-view="catalog">资料册</button></div>
+        <select id="sortFilter" aria-label="排列顺序">
+          <option value="">最新发行</option>
+          <option value="added">最近入库</option>
+          <option value="magnets">最近有新磁链</option>
+          <option value="title">影片名</option>
+          <option value="favorite">收藏优先</option>
+        </select>
+        <div class="view-switcher" aria-label="浏览方式">
+          <button class="view-btn is-active" aria-pressed="true" data-view="gallery">海报墙</button>
+          <button class="view-btn" aria-pressed="false" data-view="shelf">收藏架</button>
+          <button class="view-btn" aria-pressed="false" data-view="catalog">资料册</button>
+        </div>
         <button id="toggleSelection" class="text-button">选择</button>
-        <details id="exportMenu" class="export-menu"><summary>导出</summary><div class="export-popover"><small id="exportHint">当前筛选结果</small><button id="exportCsv">影片资料表 · CSV</button><button id="exportTxt">磁链列表 · TXT</button></div></details>
+        <details id="exportMenu" class="export-menu">
+          <summary>导出</summary>
+          <div class="export-popover">
+            <small id="exportHint">当前筛选结果</small>
+            <button id="exportCsv">影片资料表 · CSV</button>
+            <button id="exportTxt">磁链列表 · TXT</button>
+          </div>
+        </details>
       </div>
     </section>
     <div id="updateScope" class="update-scope" hidden></div>
-    <details class="library-update-reminders"><summary>系列更新 <span id="reminderSummary"></span></summary><div id="librarySeriesReminders">正在读取更新时间…</div></details>
+    <details class="library-update-reminders">
+      <summary>系列更新 <span id="reminderSummary"></span></summary>
+      <div id="librarySeriesReminders">正在读取更新时间…</div>
+    </details>
     <section id="movieGrid" class="movie-grid view-gallery" aria-live="polite"></section>
-    <div id="emptyState" class="empty-state" hidden><h3>没有找到影片</h3><p>换个关键词，或清除筛选试试。</p><button id="emptyClear">显示全部影片</button></div>
-    <footer class="pagination" id="pagination"><button id="prevPage">← 上一页</button><div id="pageNumbers" class="page-numbers"></div><button id="nextPage">下一页 →</button><label class="page-size-control">每页 <select id="pageSize" aria-label="每页显示数量"><option value="24">24</option><option value="36" selected>36</option><option value="48">48</option><option value="72">72</option></select></label></footer>
-    <div id="selectionBar" class="selection-bar" hidden><strong id="selectedCount">未选择影片</strong><button id="selectPage">选择本页</button><button id="clearSelection">清空</button><button id="batchFavorite">收藏</button><button id="batchUnfavorite">取消收藏</button><button id="finishSelection">完成</button></div>
+    <div id="emptyState" class="empty-state" hidden>
+      <h3>没有找到影片</h3>
+      <p>换个关键词，或清除筛选试试。</p>
+      <button id="emptyClear">显示全部影片</button>
+    </div>
+    <footer class="pagination" id="pagination">
+      <button id="prevPage">← 上一页</button>
+      <div id="pageNumbers" class="page-numbers"></div>
+      <button id="nextPage">下一页 →</button>
+      <form id="pageJumpForm" class="page-jump">
+        <label>跳至 <input id="pageJumpInput" type="number" min="1" inputmode="numeric" aria-label="跳转页码"> 页</label>
+      </form>
+      <label class="page-size-control">每页
+        <select id="pageSize" aria-label="每页显示数量">
+          <option value="24">24</option>
+          <option value="36" selected>36</option>
+          <option value="48">48</option>
+          <option value="72">72</option>
+        </select>
+      </label>
+    </footer>
+    <div id="selectionBar" class="selection-bar" hidden>
+      <strong id="selectedCount">未选择影片</strong>
+      <button id="selectPage">选择本页</button>
+      <button id="clearSelection">清空</button>
+      <button id="batchFavorite">收藏</button>
+      <button id="batchUnfavorite">取消收藏</button>
+      <button id="batchExportCsv">导出 CSV</button>
+      <button id="batchExportTxt">导出磁链</button>
+      <button id="finishSelection">完成</button>
+    </div>
   </main>
-  <div id="sourceOverlay" class="overlay" hidden><article class="detail-panel source-panel" role="dialog" aria-modal="true" aria-labelledby="sourcesTitle"><button id="closeSources" class="close-button" aria-label="关闭来源设置">×</button><div id="sourceContent"></div></article></div>
+  <div id="sourceOverlay" class="overlay" hidden>
+    <article class="detail-panel source-panel" role="dialog" aria-modal="true" aria-labelledby="sourcesTitle">
+      <button id="closeSources" class="close-button" aria-label="关闭来源设置">×</button>
+      <div id="sourceContent"></div>
+    </article>
+  </div>
 </div>
+
 <dialog id="libraryToolsDialog" class="library-dialog" aria-labelledby="libraryToolsTitle">
-  <div class="tools-heading"><div><h2 id="libraryToolsTitle">整理资料库</h2><p>更新影片，让收藏慢慢完整。</p></div><button id="closeLibraryTools" class="quiet-button">关闭</button></div>
+  <div class="tools-heading">
+    <div>
+      <h2 id="libraryToolsTitle">整理资料库</h2>
+      <p>更新影片，让收藏慢慢完整。</p>
+    </div>
+    <button id="closeLibraryTools" class="quiet-button">关闭</button>
+  </div>
   <nav class="tools-tabs" aria-label="资料库工具" role="tablist">
     <button role="tab" id="tab-updates" aria-selected="true" aria-controls="panel-updates" data-panel="updates">更新</button>
     <button role="tab" id="tab-results" aria-selected="false" aria-controls="panel-results" data-panel="results">最近收录</button>
@@ -78,36 +156,88 @@
     <button role="tab" id="tab-backups" aria-selected="false" aria-controls="panel-backups" data-panel="backups">备份</button>
   </nav>
   <section id="panel-updates" role="tabpanel" aria-labelledby="tab-updates">
-    <div class="panel-intro"><div><h3>这次更新哪些系列？</h3><p>更新前会自动备份，已有资料会保留。</p></div><button id="editSourceSettings" class="text-button">来源设置</button></div>
-    <div class="series-selection"><button id="selectJavdb" class="text-button">选择 JavDB 系列</button><button id="clearQueueSources" class="text-button">清空选择</button></div>
-    <div id="queueSources" class="series-grid"></div>
-    <div class="update-actions"><button id="startQueue" class="primary-button">更新所选系列</button><button id="retryQueue" class="text-button">重试所选系列的失败项</button></div>
-    <div id="queueProgress" aria-live="polite"></div><div class="queue-actions"><button id="resumeQueue" class="primary-button" hidden>继续更新</button><button id="stopQueue" class="quiet-button" hidden>停止更新</button></div>
-  </section>
-  <section id="panel-results" role="tabpanel" aria-labelledby="tab-results" hidden><div class="panel-intro"><div><h3>最近的更新</h3><p>新影片与补充的磁链，都在这里。</p></div></div><div id="scanHistory"></div></section>
-  <section id="panel-failures" role="tabpanel" aria-labelledby="tab-failures" hidden><div class="panel-intro"><div><h3>留待处理</h3><p>个别页面暂时无法读取，不影响已经收录的内容。</p></div></div><div id="scanFailures"></div></section>
-  <section id="panel-backups" role="tabpanel" aria-labelledby="tab-backups" hidden><div class="backup-card"><h3>为片库留一份副本</h3><p id="backupSummary"></p><div class="update-actions"><button id="makeBackup" class="primary-button">备份一次</button><button id="openBackupFolder" class="quiet-button">打开文件夹</button></div><details class="technical-details"><summary>保存位置</summary><p id="backupPath"></p></details></div></section>
-</dialog>
-  <div id="detailOverlay" class="overlay" hidden>
-    <article class="detail-panel" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
-      <button id="closeDetail" class="close-button" aria-label="关闭">×</button>
-      <div id="detailContent"></div>
-    </article>
-  </div>
-
-  <div id="shutdownOverlay" class="overlay" hidden>
-    <article class="detail-panel" role="dialog" aria-modal="true" aria-labelledby="shutdownTitle">
-      <h2 id="shutdownTitle">安全退出 Yav</h2>
-      <p>退出会停止正在进行的扫描并关闭 Yav。是否继续？</p>
-      <div class="detail-actions">
-        <button id="cancelShutdown" type="button">取消</button>
-        <button id="confirmShutdown" class="favorite-button is-active" type="button">确认安全退出</button>
+    <div class="panel-intro">
+      <div>
+        <h3>这次更新哪些系列？</h3>
+        <p>更新前会自动备份，已有资料会保留。</p>
       </div>
-    </article>
-  </div>
+      <button id="editSourceSettings" class="text-button">来源设置</button>
+    </div>
+    <div class="series-selection">
+      <button id="selectDueSeries" class="text-button">选择到期系列</button>
+      <button id="selectJavdb" class="text-button">选择 JavDB 系列</button>
+      <button id="clearQueueSources" class="text-button">清空选择</button>
+    </div>
+    <div id="queueSources" class="series-grid"></div>
+    <div class="update-actions">
+      <button id="startQueue" class="primary-button">更新所选系列</button>
+      <button id="retryQueue" class="text-button">重试所选系列的失败项</button>
+    </div>
+    <div id="queueProgress" aria-live="polite"></div>
+    <div class="queue-actions">
+      <button id="resumeQueue" class="primary-button" hidden>继续更新</button>
+      <button id="stopQueue" class="quiet-button" hidden>停止更新</button>
+    </div>
+  </section>
+  <section id="panel-results" role="tabpanel" aria-labelledby="tab-results" hidden>
+    <div class="panel-intro">
+      <div>
+        <h3>最近的更新</h3>
+        <p>新影片与补充的磁链，都在这里。</p>
+      </div>
+    </div>
+    <div id="scanHistory"></div>
+  </section>
+  <section id="panel-failures" role="tabpanel" aria-labelledby="tab-failures" hidden>
+    <div class="panel-intro">
+      <div>
+        <h3>留待处理</h3>
+        <p>个别页面暂时无法读取，不影响已经收录的内容。</p>
+      </div>
+    </div>
+    <div id="scanFailures"></div>
+  </section>
+  <section id="panel-backups" role="tabpanel" aria-labelledby="tab-backups" hidden>
+    <div class="backup-card">
+      <h3>为片库留一份副本</h3>
+      <p id="backupSummary"></p>
+      <div class="update-actions">
+        <button id="makeBackup" class="primary-button">备份一次</button>
+        <button id="openBackupFolder" class="quiet-button">打开文件夹</button>
+      </div>
+      <details class="technical-details">
+        <summary>保存位置</summary>
+        <p id="backupPath"></p>
+      </details>
+    </div>
+  </section>
+</dialog>
 
-  <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script type="module" src="/assets/app.js"></script>
-  <script src="/assets/accessibility.js"></script>
+<div id="detailOverlay" class="overlay" hidden>
+  <article class="detail-panel" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
+    <button id="closeDetail" class="close-button" aria-label="关闭">×</button>
+    <div id="detailContent"></div>
+  </article>
+</div>
+
+<div id="lightboxOverlay" class="overlay lightbox-overlay" hidden>
+  <button id="closeLightbox" class="close-button lightbox-close" aria-label="关闭大图预览">×</button>
+  <img id="lightboxImage" class="lightbox-img" alt="">
+</div>
+
+<div id="shutdownOverlay" class="overlay" hidden>
+  <article class="detail-panel" role="dialog" aria-modal="true" aria-labelledby="shutdownTitle">
+    <h2 id="shutdownTitle">安全退出 Yav</h2>
+    <p>退出会停止正在进行的扫描并关闭 Yav。是否继续？</p>
+    <div class="detail-actions">
+      <button id="cancelShutdown" type="button">取消</button>
+      <button id="confirmShutdown" class="favorite-button is-active" type="button">确认安全退出</button>
+    </div>
+  </article>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script type="module" src="/assets/app.js"></script>
+<script src="/assets/accessibility.js"></script>
 </body>
 </html>

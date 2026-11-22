@@ -131,7 +131,21 @@ async function loadSeriesReminders() {
   const rows = panels.flatMap(result => result.status === 'fulfilled' ? result.value : []);
   const dueCount = rows.filter(item => monthlyUpdateReminder(item)).length;
   $('#reminderSummary').textContent = rows.length+' 个系列'+(dueCount ? ' · '+dueCount+' 项可更新' : '');
-  box.innerHTML = rows.map(item => `<div class="series-update-row"><strong>${escapeHtml(item.name)} <small>· ${escapeHtml(item.source.toUpperCase())}</small></strong><span>上次更新：${escapeHtml(displayDate(item.last_scanned_at) || '尚未扫描')}</span><span class="${monthlyUpdateReminder(item) ? 'source-hint' : ''}">${escapeHtml(updateReminderLine(item))}</span></div>`).join('') + (panels.some(result => result.status === 'rejected') ? '<p>部分来源提醒读取失败，请刷新重试。</p>' : '');
+  box.innerHTML = rows.map(item => {
+    const due = monthlyUpdateReminder(item);
+    const updateAction = item.enabled
+      ? `<button type="button" class="text-button" data-reminder-update="${item.id}">去更新</button>`
+      : '';
+    return `<div class="series-update-row">
+      <strong>${escapeHtml(item.name)} <small>· ${escapeHtml(item.source.toUpperCase())}</small></strong>
+      <span>上次更新：${escapeHtml(displayDate(item.last_scanned_at) || '尚未扫描')}</span>
+      <span class="${due ? 'source-hint is-due' : ''}">${escapeHtml(updateReminderLine(item))}</span>
+      <span class="reminder-actions">
+        <button type="button" class="text-button" data-reminder-filter="${escapeHtml(item.name)}">看片</button>
+        ${updateAction}
+      </span>
+    </div>`;
+  }).join('') + (panels.some(result => result.status === 'rejected') ? '<p>部分来源提醒读取失败，请刷新重试。</p>' : '');
 }
 
 function fillSelect(selector, values, allLabel, unknownLabel = '') {
@@ -347,14 +361,20 @@ function closeDetail() { const id=state.currentMovie?.id; movieDetailRequestId +
 function clearFilters() {
   state.quick = 'all';
   state.page = 1;
-  state.filters = { q: '', studio: '', series: '', actress: '', source: '', has_magnet: '' };
-  $('#searchInput').value = '';
-  $('#studioFilter').value = '';
-  $('#seriesFilter').value = '';
-  $('#actressFilter').value = '';
-  $('#sourceFilter').value = '';
-  $('#magnetFilter').value = '';
-  $$('.nav-item[data-quick]').forEach(item => { const active=item.dataset.quick === 'all'; item.classList.toggle('is-active', active); active ? item.setAttribute('aria-current','page') : item.removeAttribute('aria-current'); });
+  state.filters = {
+    q: '',
+    studio: '',
+    series: '',
+    actress: '',
+    source: '',
+    has_magnet: '',
+    date_from: '',
+    date_to: '',
+    duration: '',
+    missing: '',
+    sort: '',
+  };
+  libraryTools.syncControls();
   loadMovies({ scroll: true });
 }
 
@@ -425,6 +445,7 @@ function bindEvents() {
   });
 
   $('#movieGrid').addEventListener('click', event => {
+    if (libraryTools.handleCardClick(event)) return;
     const favorite = event.target.closest('[data-favorite]');
     if (favorite) {
       const movie = state.result.items.find(item => item.id === Number(favorite.dataset.favorite));
@@ -444,12 +465,28 @@ function bindEvents() {
 
   $('#closeDetail').addEventListener('click', closeDetail);
   $('#detailOverlay').addEventListener('click', event => { if (event.target === $('#detailOverlay')) closeDetail(); });
-document.addEventListener('keydown', event => { if (event.key !== 'Escape') return; if (!$('#sourceOverlay').hidden) closeSources(); else if (!$('#detailOverlay').hidden) closeDetail(); });
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return;
+    if (libraryTools.closeLightbox()) return;
+    if (!$('#sourceOverlay').hidden) closeSources();
+    else if (!$('#detailOverlay').hidden) closeDetail();
+  });
 
   $('#detailContent').addEventListener('click', event => {
     const copy = event.target.closest('[data-copy]');
     if (copy) {
-      navigator.clipboard.writeText(copy.dataset.copy).then(() => showToast('磁链已复制')).catch(() => showToast('复制失败，请检查浏览器权限'));
+      navigator.clipboard.writeText(copy.dataset.copy).then(() => {
+        showToast('磁链已复制');
+        copy.textContent = '已复制 ✓';
+        copy.classList.add('is-copied');
+        clearTimeout(copy._copyTimer);
+        copy._copyTimer = setTimeout(() => {
+          if (copy.isConnected) {
+            copy.textContent = '复制磁链';
+            copy.classList.remove('is-copied');
+          }
+        }, 1500);
+      }).catch(() => showToast('复制失败，请检查浏览器权限'));
       return;
     }
     if (event.target.closest('#editMovie')) {

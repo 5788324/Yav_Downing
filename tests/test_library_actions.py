@@ -212,5 +212,15 @@ class LibraryActionsTests(unittest.TestCase):
         queue.start(resume=True);queue.thread.join(10)
         self.assertEqual(queue.status()['status'],'completed');self.assertEqual(order,[ids[0],*ids])
 
+    def test_schema_version_upgrades_to_5_idempotently(self):
+        with self.db.connect() as conn:
+            ver = conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()[0]
+        self.assertEqual(ver, '5')
+        reopened = LibraryDatabase(self.db.path)
+        with reopened.connect() as conn:
+            self.assertEqual(conn.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+            ver2 = conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()[0]
+        self.assertEqual(ver2, '5')
+
 
 if __name__=='__main__': unittest.main()

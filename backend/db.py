@@ -184,7 +184,6 @@ CREATE INDEX IF NOT EXISTS idx_scan_failures_unresolved ON scan_failures(source,
             previous_version = int(version_row[0]) if version_row and str(version_row[0]).isdigit() else 1
             if previous_version < 4:
                 self._migrate_btih_to_v4(db)
-            db.execute("UPDATE schema_meta SET value='4' WHERE key='schema_version'")
             db.execute("UPDATE scan_runs SET status='interrupted', finished_at=? WHERE status IN ('starting','running','stopping')", (self.now(),))
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS scan_run_movies(
@@ -202,6 +201,7 @@ CREATE INDEX IF NOT EXISTS idx_scan_failures_unresolved ON scan_failures(source,
                     mode TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', run_id INTEGER,
                     PRIMARY KEY(job_id,series_id));
             """)
+            db.execute("UPDATE schema_meta SET value='5' WHERE key='schema_version'")
             invalid = tuple(sorted(INVALID_METADATA_VALUES))
             placeholders = ",".join("?" for _ in invalid)
             db.execute(f"UPDATE source_entries SET studio='' WHERE studio IN ({placeholders})", invalid)
@@ -444,27 +444,61 @@ CREATE INDEX IF NOT EXISTS idx_scan_failures_unresolved ON scan_failures(source,
         values: list[Any] = []
         for key, value in (("date_from", date_from), ("date_to", date_to)):
             if value:
-                try: datetime.strptime(value, "%Y-%m-%d")
-                except ValueError as exc: raise ValueError("日期必须是 YYYY-MM-DD 格式") from exc
+                try:
+                    datetime.strptime(value, "%Y-%m-%d")
+                except ValueError as exc:
+                    raise ValueError("日期必须是 YYYY-MM-DD 格式") from exc
                 where.append("m.release_date" + (">=?" if key == "date_from" else "<=?"))
                 values.append(value)
-        if date_from and date_to and date_from > date_to: raise ValueError("开始日期不能晚于结束日期")
-        durations = {"short":"m.duration_minutes < 30", "medium":"m.duration_minutes >= 30 AND m.duration_minutes <= 60", "long":"m.duration_minutes > 60", "unknown":"m.duration_minutes IS NULL"}
+        if date_from and date_to and date_from > date_to:
+            raise ValueError("开始日期不能晚于结束日期")
+
+        durations = {
+            "short": "m.duration_minutes < 30",
+            "medium": "m.duration_minutes >= 30 AND m.duration_minutes <= 60",
+            "long": "m.duration_minutes > 60",
+            "unknown": "m.duration_minutes IS NULL",
+        }
         if duration:
-            if duration not in durations: raise ValueError("无效时长筛选")
-            where.append("(" + durations[duration] + ")")
-        missing_fields = {"cover":"m.cover_url='' AND m.cover_path=''", "studio":"m.studio=''", "series":"m.series=''", "date":"m.release_date=''", "actresses":"NOT EXISTS(SELECT 1 FROM movie_actresses ma WHERE ma.movie_id=m.id)"}
+            if duration not in durations:
+                raise ValueError("无效时长筛选")
+            where.append(f"({durations[duration]})")
+
+        missing_fields = {
+            "cover": "m.cover_url='' AND m.cover_path=''",
+            "studio": "m.studio=''",
+            "series": "m.series=''",
+            "date": "m.release_date=''",
+            "actresses": "NOT EXISTS(SELECT 1 FROM movie_actresses ma WHERE ma.movie_id=m.id)",
+        }
         if missing:
-            if missing not in missing_fields: raise ValueError("无效缺失资料筛选")
-            where.append("(" + missing_fields[missing] + ")")
+            if missing not in missing_fields:
+                raise ValueError("无效缺失资料筛选")
+            where.append(f"({missing_fields[missing]})")
+
         if run_id:
-            clause = (" AND rm.is_new=1" if update_kind == "movies" else
-                      " AND rm.is_new=0 AND rm.new_magnets>0" if update_kind == "old_magnets" else
-                      " AND rm.new_magnets>0" if update_kind == "magnets" else "")
-            where.append("EXISTS(SELECT 1 FROM scan_run_movies rm WHERE rm.movie_id=m.id AND rm.run_id=?" + clause + ")")
+            if update_kind == "movies":
+                clause = " AND rm.is_new=1"
+            elif update_kind == "old_magnets":
+                clause = " AND rm.is_new=0 AND rm.new_magnets>0"
+            elif update_kind == "magnets":
+                clause = " AND rm.new_magnets>0"
+            else:
+                clause = ""
+            where.append(
+                f"EXISTS(SELECT 1 FROM scan_run_movies rm WHERE rm.movie_id=m.id AND rm.run_id=?{clause})"
+            )
             values.append(int(run_id))
-        sorts = {"release":"CASE WHEN m.release_date='' THEN 1 ELSE 0 END, m.release_date DESC", "added":"m.created_at DESC", "magnets":"(SELECT MAX(discovered_at) FROM magnets sm WHERE sm.movie_id=m.id) DESC", "title":"m.title COLLATE NOCASE ASC", "favorite":"m.favorite DESC, m.release_date DESC"}
-        if sort not in sorts: raise ValueError("无效排序")
+
+        sorts = {
+            "release": "CASE WHEN m.release_date='' THEN 1 ELSE 0 END, m.release_date DESC",
+            "added": "m.created_at DESC",
+            "magnets": "(SELECT MAX(discovered_at) FROM magnets sm WHERE sm.movie_id=m.id) DESC",
+            "title": "m.title COLLATE NOCASE ASC",
+            "favorite": "m.favorite DESC, m.release_date DESC",
+        }
+        if sort not in sorts:
+            raise ValueError("无效排序")
         order_sql = sorts[sort]
 
         if query:
@@ -763,40 +797,70 @@ CREATE INDEX IF NOT EXISTS idx_scan_failures_unresolved ON scan_failures(source,
             return cursor.rowcount > 0
 
     def batch_favorite(self, ids, favorite):
-        if type(favorite) is not bool or not isinstance(ids, list) or not ids or len(ids) > 100:
-            raise ValueError("请选择 1～100 部影片，并指定收藏状态")
-        if any(type(i) is not int or i <= 0 for i in ids): raise ValueError("影片编号无效")
-        ids = list(dict.fromkeys(ids)); marks = ','.join('?' for _ in ids)
+        if type(favorite) is not bool or not isinstance(ids, list) or not ids or len(ids) > 500:
+            raise ValueError("请选择 1～500 部影片，并指定收藏状态")
+        if any(type(i) is not int or i <= 0 for i in ids):
+            raise ValueError("影片编号无效")
+        unique_ids = list(dict.fromkeys(ids))
+        marks = ",".join("?" for _ in unique_ids)
         with self.connect() as db:
-            if db.execute(f"SELECT COUNT(*) FROM movies WHERE id IN ({marks})", ids).fetchone()[0] != len(ids):
+            found = db.execute(
+                f"SELECT COUNT(*) FROM movies WHERE id IN ({marks})",
+                unique_ids,
+            ).fetchone()[0]
+            if found != len(unique_ids):
                 raise ValueError("部分影片不存在，未修改收藏")
-            db.execute(f"UPDATE movies SET favorite=?,updated_at=? WHERE id IN ({marks})", [int(favorite),self.now(),*ids])
-        return {"updated":len(ids),"favorite":favorite}
+            db.execute(
+                f"UPDATE movies SET favorite=?, updated_at=? WHERE id IN ({marks})",
+                [int(favorite), self.now(), *unique_ids],
+            )
+        return {"updated": len(unique_ids), "favorite": favorite}
 
     def set_local_cover(self, movie_id, path, manual=True):
         with self.connect() as db:
-            row = db.execute('SELECT * FROM movies WHERE id=?',(movie_id,)).fetchone()
-            if not row: raise ValueError('影片不存在')
+            row = db.execute("SELECT * FROM movies WHERE id=?", (movie_id,)).fetchone()
+            if not row:
+                raise ValueError("影片不存在")
             fields = self._manual_fields(row)
-            if manual: fields.add('cover_url')
-            db.execute('UPDATE movies SET cover_path=?,manual_fields=?,updated_at=? WHERE id=?',
-                       (str(path),json.dumps(sorted(fields)),self.now(),movie_id))
+            if manual:
+                fields.add("cover_url")
+            db.execute(
+                "UPDATE movies SET cover_path=?, manual_fields=?, updated_at=? WHERE id=?",
+                (str(path), json.dumps(sorted(fields)), self.now(), movie_id),
+            )
         return self.get_movie(movie_id)
 
     def record_run_movie(self, run_id, source, url, is_new, new_magnets):
         with self.connect() as db:
-            row = db.execute('SELECT movie_id FROM source_entries WHERE source=? AND source_url=?',(source,url)).fetchone()
-            if not row: return
-            db.execute('''INSERT INTO scan_run_movies VALUES(?,?,?,?)
-                ON CONFLICT(run_id,movie_id) DO UPDATE SET
-                is_new=MAX(is_new,excluded.is_new),new_magnets=new_magnets+excluded.new_magnets''',
-                (run_id,row[0],int(is_new),new_magnets))
+            row = db.execute(
+                "SELECT movie_id FROM source_entries WHERE source=? AND source_url=?",
+                (source, url),
+            ).fetchone()
+            if not row:
+                return
+            db.execute(
+                """
+                INSERT INTO scan_run_movies VALUES(?, ?, ?, ?)
+                ON CONFLICT(run_id, movie_id) DO UPDATE SET
+                    is_new = MAX(is_new, excluded.is_new),
+                    new_magnets = new_magnets + excluded.new_magnets
+                """,
+                (run_id, row[0], int(is_new), new_magnets),
+            )
 
     def scan_history(self):
         with self.connect() as db:
-            return [dict(r) for r in db.execute('''SELECT r.*,s.name,s.source,
-                (SELECT COUNT(*) FROM scan_run_movies rm WHERE rm.run_id=r.id) AS tracked_count
-                FROM scan_runs r JOIN source_series s ON s.id=r.series_id ORDER BY r.id DESC LIMIT 30''')]
+            rows = db.execute(
+                """
+                SELECT r.*, s.name, s.source,
+                       (SELECT COUNT(*) FROM scan_run_movies rm WHERE rm.run_id = r.id) AS tracked_count
+                FROM scan_runs r
+                JOIN source_series s ON s.id = r.series_id
+                ORDER BY r.id DESC
+                LIMIT 30
+                """
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     def get_cover_path(self, movie_id: int) -> Path | None:
         with self.connect() as db:
@@ -876,11 +940,38 @@ CREATE INDEX IF NOT EXISTS idx_scan_failures_unresolved ON scan_failures(source,
                 raise ValueError("该来源网址已经存在") from exc
     def delete_source_series(self, series_id, source):
         with self.connect() as db:
-            if not db.execute('SELECT 1 FROM source_series WHERE id=? AND source=?',(series_id,source)).fetchone(): return False
-            if db.execute("SELECT 1 FROM scan_runs WHERE series_id=? AND status IN ('running','starting','stopping')",(series_id,)).fetchone(): raise ValueError('请先停止扫描')
-            if db.execute("SELECT 1 FROM update_job_items i JOIN update_jobs j ON j.id=i.job_id WHERE i.series_id=? AND j.status IN ('running','stopping')",(series_id,)).fetchone(): raise ValueError('请先停止更新队列')
-            db.execute('DELETE FROM scan_run_movies WHERE run_id IN (SELECT id FROM scan_runs WHERE series_id=?)',(series_id,))
-            db.execute('DELETE FROM update_job_items WHERE series_id=?',(series_id,))
-            db.execute('DELETE FROM scan_failures WHERE series_id=?',(series_id,))
-            db.execute('DELETE FROM scan_runs WHERE series_id=?',(series_id,))
-            return db.execute("DELETE FROM source_series WHERE id=? AND source=?", (series_id, source)).rowcount > 0
+            exists = db.execute(
+                "SELECT 1 FROM source_series WHERE id=? AND source=?",
+                (series_id, source),
+            ).fetchone()
+            if not exists:
+                return False
+            scanning = db.execute(
+                "SELECT 1 FROM scan_runs WHERE series_id=? AND status IN ('running','starting','stopping')",
+                (series_id,),
+            ).fetchone()
+            if scanning:
+                raise ValueError("请先停止扫描")
+            queued = db.execute(
+                """
+                SELECT 1
+                FROM update_job_items i
+                JOIN update_jobs j ON j.id = i.job_id
+                WHERE i.series_id = ? AND j.status IN ('running', 'stopping')
+                """,
+                (series_id,),
+            ).fetchone()
+            if queued:
+                raise ValueError("请先停止更新队列")
+            db.execute(
+                "DELETE FROM scan_run_movies WHERE run_id IN (SELECT id FROM scan_runs WHERE series_id=?)",
+                (series_id,),
+            )
+            db.execute("DELETE FROM update_job_items WHERE series_id=?", (series_id,))
+            db.execute("DELETE FROM scan_failures WHERE series_id=?", (series_id,))
+            db.execute("DELETE FROM scan_runs WHERE series_id=?", (series_id,))
+            cursor = db.execute(
+                "DELETE FROM source_series WHERE id=? AND source=?",
+                (series_id, source),
+            )
+            return cursor.rowcount > 0

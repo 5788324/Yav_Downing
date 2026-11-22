@@ -1,5 +1,13 @@
 # Yav V2 工作日志
 
+## 2026-11-23：同步 2.1.0-dev.2、代码可读性收口与 9 项 UI 优化
+
+- 只读同步 `G:\codex\YAV` 的 2.1.0-dev.2 成果至主工作区并建立基线提交，未修改原目录。
+- 展开 `library_actions.py`、`library_api.py`、`db.py`、`library-tools.js` 中的单行分号压缩写法；`schema_version` 正式升至 `5`（幂等）；`library_api.py` 区分 400 与 500 错误；批量收藏与导出上限放宽至 500；恢复前端 `localStorage` 读取容错。
+- 落地 9 项 UI 体验优化：详情键盘快捷键、封面灯箱预览、磁链复制态与一键复制全部、选择模式整卡点击/Shift 连选与底部条导出、分页跳页与 `clearFilters()` 收口、提醒行直达看片/去更新、侧边栏后台队列徽标、更新弹窗一键选择到期系列、最小字号提升与深色外观切换。
+- 精简 `docs/STATUS.md` 为单一清晰基线 + 里程碑归档；新增 `test_schema_version_upgrades_to_5_idempotently` 回归用例。
+- 验证：Python 107/107、Node 4/4、JS 语法检查、`compileall`、`git diff --check` 全部通过，推送至 `origin/codex/fix-javdb-direct-cover-image`。
+
 ## 2026-11-04：登录刷新阻塞交接
 
 - 用户要求停止当前尝试、整理项目供新对话继续。仅执行 Git/API/SQLite 只读核对，没有再次打开会话或启动扫描。

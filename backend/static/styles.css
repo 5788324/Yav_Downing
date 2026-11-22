@@ -1,7 +1,25 @@
 :root {
-  --ink:#252722; --muted:#68725e; --line:#e5e6de; --paper:#f7f7f2; --paper-2:#eeeee7;
+  --ink:#252722; --muted:#5f6956; --line:#e5e6de; --paper:#f7f7f2; --paper-2:#eeeee7;
+  --sidebar-bg:#efefe8; --surface:#fff; --surface-soft:#fbfcf8; --hero-bg:#f0f1e9;
   --card:#fff; --accent:#9b6345; --accent-soft:#f2e8de; --dark:#252722; --white:#fff;
+  --hover-bg:#e8e9e0; --chip-bg:#eaece3; --pill-bg:#171b15a6; --overlay-bg:#20261a88;
   --shadow:0 12px 36px #25272212;
+}
+:root[data-theme="dark"] {
+  --ink:#e7e9e2; --muted:#a1aa97; --line:#33382e; --paper:#181a16; --paper-2:#232620;
+  --sidebar-bg:#1d201a; --surface:#22251f; --surface-soft:#1c1f1a; --hero-bg:#20241d;
+  --card:#22251f; --accent:#d18e67; --accent-soft:#3a2c24; --dark:#d18e67; --white:#181a16;
+  --hover-bg:#2b2f27; --chip-bg:#2c3128; --pill-bg:#0d100cc9; --overlay-bg:#090b08b8;
+  --shadow:0 12px 36px #0000004d;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ink:#e7e9e2; --muted:#a1aa97; --line:#33382e; --paper:#181a16; --paper-2:#232620;
+    --sidebar-bg:#1d201a; --surface:#22251f; --surface-soft:#1c1f1a; --hero-bg:#20241d;
+    --card:#22251f; --accent:#d18e67; --accent-soft:#3a2c24; --dark:#d18e67; --white:#181a16;
+    --hover-bg:#2b2f27; --chip-bg:#2c3128; --pill-bg:#0d100cc9; --overlay-bg:#090b08b8;
+    --shadow:0 12px 36px #0000004d;
+  }
 }
 * { box-sizing:border-box; }
 [hidden] { display:none !important; }
@@ -344,3 +362,61 @@ h1 { margin:0 0 9px; font-size:29px; line-height:1.25; letter-spacing:-.04em; fo
   .source-actions { justify-content:flex-start; }
 }
 @media(prefers-reduced-motion:reduce) { * { transition:none !important; } }
+
+/* 深色模式与可读性增强、新增交互组件样式 */
+.sidebar { background:var(--sidebar-bg); }
+.nav-item { color:var(--muted); }
+.nav-item:hover { background:var(--hover-bg); }
+.nav-item.is-active { background:var(--surface); color:var(--ink); }
+.nav-item strong { font-size:12px; }
+.brand-subtitle,.section-kicker,.sidebar-foot,.library-counts,#resultSummary,.filter-grid label,.active-filters .filter-chip,.collection-actions>select,.library-update-reminders,.series-update-row,.card-meta,.card-actresses,.pagination button,.page-size-control,.detail-kicker,.detail-fact span,.magnet-heading p,.magnet-heading select,.temporary-lookups,.magnet-sources,.magnet-actions a,.magnet-discovery,.edit-form label,.source-compare,.tools-heading p,.panel-intro p,.backup-card p,#queueProgress>p,.queue-item,.technical-details,.result-title small,.scan-result>p,.failure-row>p,.source-card-main>span,.source-hint,.source-progress,.source-form label,.session-card span,.session-card p {
+  font-size:12px;
+  color:var(--muted);
+}
+.source-pill,.series-choice small,.manual-marker,.export-popover small { font-size:11px; }
+.search-box input,.primary-series select,.quiet-button,#filterFields,.view-btn.is-active,.export-popover,.detail-menu,.source-menu>div,.view-shelf .movie-card,.view-catalog .movie-card,.detail-panel,.library-dialog,.series-choice,.result-more button,.session-card select {
+  background:var(--surface);
+  color:var(--ink);
+}
+.filter-grid input,.filter-grid select,.edit-form input,.source-form input:not([type=checkbox]) {
+  background:var(--surface-soft);
+  color:var(--ink);
+}
+.detail-hero,.session-card { background:var(--hero-bg); }
+.view-switcher { background:var(--paper-2); }
+.filter-chip,.page-numbers button.is-active { background:var(--chip-bg); color:var(--ink); }
+.overlay { background:var(--overlay-bg); }
+.close-button { background:var(--surface); color:var(--muted); }
+.favorite-card-btn,.movie-selection { background:var(--surface); }
+.category-link { display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%; color:var(--ink); }
+.queue-badge { padding:2px 7px; border-radius:999px; font-size:11px; font-weight:500; background:var(--accent-soft); color:var(--accent); white-space:nowrap; }
+.queue-badge.is-running { background:var(--accent); color:#fff; }
+.queue-badge.is-attention { background:#b3472e22; color:#b3472e; }
+.sidebar-foot-actions { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.sidebar-foot-actions button { color:var(--muted); font-size:12px; }
+.sidebar-foot-actions button:hover { color:var(--accent); }
+.reminder-actions { margin-left:auto; display:inline-flex; gap:12px; align-items:center; }
+.source-hint.is-due { color:var(--accent); font-weight:500; }
+.page-jump { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
+.page-jump input { width:56px; height:30px; padding:4px 7px; border:1px solid var(--line); border-radius:6px; background:var(--surface); color:var(--ink); text-align:center; font-size:12px; }
+.is-selecting .movie-card { cursor:pointer; }
+.is-selecting .poster-button { cursor:pointer; }
+.detail-poster.is-zoomable { cursor:zoom-in; }
+.detail-poster.is-zoomable:hover { opacity:.94; }
+.lightbox-overlay { display:grid; place-items:center; z-index:220; padding:28px; cursor:zoom-out; }
+.lightbox-img { max-width:min(94vw,1200px); max-height:90vh; width:auto; height:auto; border-radius:10px; box-shadow:0 20px 80px #00000066; cursor:default; }
+.lightbox-close { position:fixed; top:18px; right:22px; margin:0; float:none; z-index:225; }
+.copy-all-magnets { min-height:30px; padding:4px 10px; font-size:12px; }
+.copy-magnet.is-copied { background:#3b6e4c; color:#fff; }
+.series-choice-name { display:grid; gap:3px; min-width:0; }
+.series-choice-date { font-style:normal; font-size:11px; color:var(--muted); }
+.series-choice.is-due { border-color:var(--accent); }
+.series-choice.is-due .series-choice-date { color:var(--accent); }
+:root[data-theme="dark"] .primary-button,
+:root[data-theme="dark"] .detail-actions .primary-action,
+:root[data-theme="dark"] .magnet-actions button,
+:root[data-theme="dark"] .save-row button:not(.cancel-edit) { color:#181a16; font-weight:500; }
+:root[data-theme="dark"] .selection-bar { background:#2a3026; border:1px solid var(--line); }
+:root[data-theme="dark"] .selection-bar #batchFavorite,
+:root[data-theme="dark"] .selection-bar #finishSelection { background:var(--accent); color:#181a16; }
+:root[data-theme="dark"] .queue-badge.is-attention { background:#e07a5f2e; color:#f0957c; }
